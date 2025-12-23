@@ -26,15 +26,37 @@ const (
 )
 
 type Item struct {
-	Source      config.Source
-	Category    string
-	LocalStatus core.VersionStatus
-	Downloaded  int64
-	Total       int64
+	Source         config.Source
+	Category       string
+	LocalStatus    core.VersionStatus
+	CurrentVersion string
+	LatestVersion  string
+	Downloaded     int64
+	Total          int64
 }
 
-func (i Item) Title() string       { return i.Source.Name }
-func (i Item) Description() string { return string(i.LocalStatus) }
+func (i Item) Title() string {
+	if i.Source.Name != "" {
+		return i.Source.Name
+	}
+	if i.Source.ID != "" {
+		return fmt.Sprintf("ID: %s", i.Source.ID)
+	}
+	return "Unnamed Source"
+}
+func (i Item) Description() string {
+	status := string(i.LocalStatus)
+	if i.LocalStatus == core.StatusUpToDate && i.CurrentVersion != "" {
+		return fmt.Sprintf("Up to Date [v%s]", i.CurrentVersion)
+	}
+	if i.LocalStatus == core.StatusNewer && i.CurrentVersion != "" && i.LatestVersion != "" {
+		return fmt.Sprintf("Newer Version Available [v%s -> v%s]", i.CurrentVersion, i.LatestVersion)
+	}
+	if i.LatestVersion != "" && i.LocalStatus != core.StatusUpToDate && i.LocalStatus != core.StatusNewer {
+		return fmt.Sprintf("%s [Latest: v%s]", status, i.LatestVersion)
+	}
+	return status
+}
 func (i Item) FilterValue() string { return i.Source.Name }
 
 type Model struct {

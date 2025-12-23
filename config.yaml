@@ -1,28 +1,25 @@
 storage:
   default_root: "./Downloads"
 
+general:
+  os:
+    - "linux"
+    - "macos"
+  arch:
+    - "amd64"
+    - "arm64"
+
 categories:
-  ISOs:
+  ISO Images:
     path: "./Downloads/ISOs"
     sources:
-      - name: "Ubuntu Mate 25.10"
-        url: "https://cdimage.ubuntu.com/ubuntu-mate/releases/25.10/release/ubuntu-mate-25.10-desktop-amd64.iso"
-        check_type: "http_header"
-  Zims:
+      - id: "ubuntu-mate"
+      - id: "fedora-coreos"
+  ZIMs:
     path: "./Downloads/Kiwix"
     sources:
-      - name: "Wikipedia English"
-        url: "https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_maxi.zim"
-        check_type: "version_pattern"
-      - name: "PHET"
-        url: "https://download.kiwix.org/zim/phet/phet_en_all_2025-03.zim"
-        check_type: "version_pattern"
+      - id: "kiwix-wikipedia"
   Applications:
     path: "./Downloads/Apps"
     sources:
-      - name: "BalenaEtcher Linux"
-        os: "linux"
-        url: "https://github.com/balena-io/etcher/releases/download/v2.1.4/balenaEtcher-linux-x64-2.1.4.zip"
-      - name: "BalenaEtcher macOS"
-        os: "macos"
-        url: "https://github.com/balena-io/etcher/releases/download/v2.1.4/balenaEtcher-2.1.4-arm64.dmg"
+      - id: "balena-etcher"

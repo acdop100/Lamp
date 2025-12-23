@@ -1,0 +1,49 @@
+# catalog.yaml - Download Source Definitions
+#
+# Parameterized Variables:
+# Sources can use {{os}} and {{arch}} placeholders in their params.
+#
+# Available Variables:
+#   {{os}}            - "linux", "macos", "windows"
+#   {{os_short}}      - "mac" for macos, matching the OS otherwise
+#   {{arch}}          - "amd64", "arm64"
+#   {{arch_fedora}}   - Maps amd64 -> x86_64, arm64 -> aarch64
+#   {{arch_electron}} - Maps amd64 -> x64, arm64 -> arm64
+#   {{ext}}           - Generic extension: "zip" for linux, "dmg" for macos
+#
+sources:
+  - id: "ubuntu-mate"
+    name: "Ubuntu Mate"
+    strategy: "web_scrape"
+    params:
+      base_url: "https://cdimage.ubuntu.com/ubuntu-mate/releases/"
+      # Find directories like "25.10/"
+      version_pattern: '(\d+\.\d+)/'
+      # Construct the ISO URL: base + version + template
+      file_template: "{{version}}/release/ubuntu-mate-{{version}}-desktop-{{arch}}.iso"
+
+  - id: "fedora-coreos"
+    name: "Fedora CoreOS"
+    strategy: "fedora_coreos"
+    params:
+      stream: "stable"
+      arch: "{{arch_fedora}}" # map amd64->x86_64
+      artifact_type: "metal"
+
+  - id: "kiwix-wikipedia"
+    name: "Wikipedia English (100 articles)"
+    strategy: "kiwix_feed"
+    params:
+      series: "wikipedia_en_100_mini"
+      feed_url: "https://library.kiwix.org/catalog/v2/entries"
+
+  - id: "balena-etcher"
+    name: "BalenaEtcher"
+    strategy: "github_release"
+    params:
+      repo: "balena-io/etcher"
+      # Pattern: balenaEtcher-<ver>-<os>-<arch>.<ext>
+      # e.g. balenaEtcher-1.19.25-linux-x64.zip
+      # e.g. balenaEtcher-1.19.25-mac-arm64.dmg
+      asset_pattern: "balenaEtcher-.*{{os_short}}.*{{arch_electron}}.*\\.{{ext}}"
+    exclude: ["linux/arm64"]

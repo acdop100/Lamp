@@ -26,9 +26,11 @@ const (
 )
 
 type CheckResult struct {
-	Status  VersionStatus
-	Remote  string // ETag, Last-Modified, or Version String
-	Message string
+	Status      VersionStatus
+	Current     string // Local version found
+	Latest      string // Latest version available
+	Message     string
+	ResolvedURL string // The dynamic URL found during checking
 }
 
 // Fedora CoreOS Metadata
@@ -41,7 +43,14 @@ type FedoraArch struct {
 }
 
 type FedoraArtifact struct {
-	Release string `json:"release"`
+	Release string                 `json:"release"`
+	Formats map[string]FedoraImage `json:"formats"`
+}
+
+type FedoraImage struct {
+	Disk struct {
+		Location string `json:"location"`
+	} `json:"disk"`
 }
 
 // Kiwix XML Feed Structures
@@ -58,62 +67,231 @@ type Entry struct {
 
 func CheckVersion(src config.Source, localPath string) CheckResult {
 	info, err := os.Stat(localPath)
-	if os.IsNotExist(err) {
+	if os.IsNotExist(err) && src.Strategy == "" {
+		// Only return NotFound if we have no strategy to verify against (legacy/direct file)
 		return CheckResult{Status: StatusNotFound}
-	} else if err != nil {
+	} else if err != nil && !os.IsNotExist(err) {
 		return CheckResult{Status: StatusError, Message: err.Error()}
 	}
 
-	switch src.CheckType {
-	case "http_header":
-		return checkHTTPHeader(src.URL, info)
-	case "version_pattern":
-		if strings.HasSuffix(localPath, ".iso") {
-			return checkLinuxISOVersion(src.URL, localPath)
-		}
-		if strings.Contains(src.URL, "kiwix.org") {
-			return checkKiwixVersion(src.URL, localPath)
-		}
-		return checkHTTPHeader(src.URL, info)
+	// Dynamic Resolution Strategies
+	switch src.Strategy {
+	case "web_scrape":
+		return resolveWebScrape(src, localPath)
+	case "fedora_coreos":
+		return resolveFedoraCoreOS(src, localPath)
+	case "kiwix_feed":
+		return resolveKiwixFeed(src, localPath)
+	case "github_release":
+		return resolveGithubRelease(src, localPath)
 	default:
-		return CheckResult{Status: StatusError, Message: "Unsupported check type: " + src.CheckType}
+		// Fallback for direct URLs (legacy behavior)
+		if src.URL != "" {
+			return checkHTTPHeader(src.URL, info)
+		}
+		return CheckResult{Status: StatusError, Message: "No strategy or URL provided"}
 	}
 }
 
-func checkLinuxISOVersion(remoteURL, localPath string) CheckResult {
-	filename := filepath.Base(localPath)
+func resolveGithubRelease(src config.Source, localPath string) CheckResult {
+	repo := src.Params["repo"]
+	assetPattern := src.Params["asset_pattern"]
 
-	// Fedora CoreOS logic
-	if strings.Contains(filename, "fedora-coreos") {
-		return checkFedoraCoreOSVersion(remoteURL, localPath)
+	if repo == "" || assetPattern == "" {
+		return CheckResult{Status: StatusError, Message: "Missing repo or asset_pattern params"}
 	}
 
-	// Ubuntu/General logic (directory scraping)
-	if strings.Contains(remoteURL, "ubuntu.com") {
-		return checkUbuntuVersion(remoteURL, localPath)
+	// GitHub API: Get latest release
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		return CheckResult{Status: StatusError, Message: "GitHub API error: " + err.Error()}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return CheckResult{Status: StatusError, Message: fmt.Sprintf("GitHub API returned %d", resp.StatusCode)}
 	}
 
-	return CheckResult{Status: StatusError, Message: "Unsupported ISO source for version checking"}
+	var release struct {
+		TagName string `json:"tag_name"`
+		Assets  []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return CheckResult{Status: StatusError, Message: "Failed to parse GitHub response"}
+	}
+
+	// Find the matching asset
+	re, err := regexp.Compile(assetPattern)
+	if err != nil {
+		return CheckResult{Status: StatusError, Message: "Invalid asset_pattern regex"}
+	}
+
+	var downloadURL string
+	for _, asset := range release.Assets {
+		if re.MatchString(asset.Name) {
+			downloadURL = asset.BrowserDownloadURL
+			break
+		}
+	}
+
+	targetDir := filepath.Dir(localPath)
+	remoteFilename := filepath.Base(downloadURL)
+	fullLocalPath := filepath.Join(targetDir, remoteFilename)
+
+	var currentVersion string
+	entries, _ := os.ReadDir(targetDir)
+	for _, entry := range entries {
+		if !entry.IsDir() && re.MatchString(entry.Name()) {
+			matches := re.FindStringSubmatch(entry.Name())
+			if len(matches) > 0 {
+				currentVersion = release.TagName // For GitHub we often just use the tag
+			}
+			break
+		}
+	}
+
+	if _, err := os.Stat(fullLocalPath); err == nil {
+		return CheckResult{Status: StatusUpToDate, Current: release.TagName, Latest: release.TagName, ResolvedURL: downloadURL}
+	}
+
+	if currentVersion != "" {
+		return CheckResult{
+			Status:      StatusNewer,
+			Current:     currentVersion,
+			Latest:      release.TagName,
+			Message:     fmt.Sprintf("New release: %s", release.TagName),
+			ResolvedURL: downloadURL,
+		}
+	}
+
+	return CheckResult{
+		Status:      StatusNotFound,
+		Latest:      release.TagName,
+		ResolvedURL: downloadURL,
+	}
 }
 
-func checkFedoraCoreOSVersion(remoteURL, localPath string) CheckResult {
-	filename := filepath.Base(localPath)
-	// Example: fedora-coreos-43.20251120.3.0-live-iso.x86_64.iso
-	re := regexp.MustCompile(`fedora-coreos-(\d+\.\d+\.\d+\.\d+)`)
-	matches := re.FindStringSubmatch(filename)
-	if len(matches) < 2 {
-		return CheckResult{Status: StatusError, Message: "Could not parse Fedora CoreOS version from filename"}
-	}
-	localVersion := matches[1]
+func resolveWebScrape(src config.Source, localPath string) CheckResult {
+	baseURL := src.Params["base_url"]
+	versionPattern := src.Params["version_pattern"]
+	fileTemplate := src.Params["file_template"]
 
-	// Determine architecture
-	arch := "x86_64"
-	if strings.Contains(filename, "aarch64") {
-		arch = "aarch64"
+	if baseURL == "" || versionPattern == "" || fileTemplate == "" {
+		return CheckResult{Status: StatusError, Message: "Missing web_scrape params"}
 	}
 
-	// Fetch streams metadata (defaulting to stable)
-	resp, err := http.Get("https://builds.coreos.fedoraproject.org/streams/stable.json")
+	// Scrape the directory
+	resp, err := http.Get(baseURL)
+	if err != nil {
+		return CheckResult{Status: StatusError, Message: "Failed to scrape: " + err.Error()}
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	reDir := regexp.MustCompile(versionPattern)
+
+	matches := reDir.FindAllStringSubmatch(string(body), -1)
+	var versions []string
+	for _, m := range matches {
+		if len(m) > 1 {
+			versions = append(versions, m[1])
+		}
+	}
+	sort.Strings(versions)
+
+	// Step 2: Iterate backwards and verify remote file existence
+	var latestVersion string
+	var remoteFullURL string
+	var remotePath string
+
+	// Regex for file pattern (to extract version from local files too)
+	templateFilenamePattern := filepath.Base(fileTemplate)
+	regexPattern := strings.ReplaceAll(templateFilenamePattern, "{{version}}", `(\d+\.\d+)`)
+	reFile := regexp.MustCompile(regexPattern)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	for i := len(versions) - 1; i >= 0; i-- {
+		v := versions[i]
+		rPath := strings.ReplaceAll(fileTemplate, "{{version}}", v)
+		rURL := baseURL + rPath
+
+		resp, err := client.Head(rURL)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			latestVersion = v
+			remoteFullURL = rURL
+			remotePath = rPath
+			resp.Body.Close()
+			break
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}
+
+	if latestVersion == "" {
+		return CheckResult{Status: StatusError, Message: "No valid remote files found for any version"}
+	}
+
+	targetDir := filepath.Dir(localPath)
+	expectedFilename := filepath.Base(remotePath)
+	fullLocalPath := filepath.Join(targetDir, expectedFilename)
+
+	// Local version detection
+	var currentVersion string
+	entries, _ := os.ReadDir(targetDir)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if reFile.MatchString(entry.Name()) {
+			m := reFile.FindStringSubmatch(entry.Name())
+			if len(m) > 1 {
+				currentVersion = m[1]
+			}
+			break
+		}
+	}
+
+	if _, err := os.Stat(fullLocalPath); err == nil {
+		return CheckResult{Status: StatusUpToDate, Current: latestVersion, Latest: latestVersion, ResolvedURL: remoteFullURL}
+	}
+
+	if currentVersion != "" {
+		return CheckResult{
+			Status:      StatusNewer,
+			Current:     currentVersion,
+			Latest:      latestVersion,
+			ResolvedURL: remoteFullURL,
+		}
+	}
+
+	return CheckResult{
+		Status:      StatusNotFound,
+		Latest:      latestVersion,
+		ResolvedURL: remoteFullURL,
+	}
+}
+
+func resolveFedoraCoreOS(src config.Source, localPath string) CheckResult {
+	stream := src.Params["stream"]
+	arch := src.Params["arch"]
+
+	if stream == "" {
+		stream = "stable"
+	}
+	if arch == "" {
+		arch = "x86_64"
+	}
+
+	metaURL := fmt.Sprintf("https://builds.coreos.fedoraproject.org/streams/%s.json", stream)
+
+	resp, err := http.Get(metaURL)
 	if err != nil {
 		return CheckResult{Status: StatusError, Message: "Failed to fetch Fedora metadata: " + err.Error()}
 	}
@@ -121,207 +299,187 @@ func checkFedoraCoreOSVersion(remoteURL, localPath string) CheckResult {
 
 	var streams FedoraCoreOSStreams
 	if err := json.NewDecoder(resp.Body).Decode(&streams); err != nil {
-		return CheckResult{Status: StatusError, Message: "Failed to parse Fedora metadata: " + err.Error()}
+		return CheckResult{Status: StatusError, Message: "Failed to parse Fedora metadata"}
 	}
 
 	archData, ok := streams.Architectures[arch]
 	if !ok {
-		return CheckResult{Status: StatusError, Message: "Architecture not found in metadata: " + arch}
+		return CheckResult{Status: StatusError, Message: "Arch not found: " + arch}
 	}
 
 	// Usually 'metal' artifact contains the ISO
+	// For metal, we might look for 'iso' or 'raw.xz' format?
+	// Commonly 'iso' format exists for metal.
 	metal, ok := archData.Artifacts["metal"]
 	if !ok {
-		return CheckResult{Status: StatusError, Message: "Metal artifact not found in metadata"}
+		// Fallback to "live" if "metal" missing? But FCOS usually has metal.
+		return CheckResult{Status: StatusError, Message: "Metal artifact not found"}
 	}
 
-	if metal.Release != localVersion {
-		// Compare version strings (FCOS versions are lexicographically comparable?)
-		// e.g. 43.20251120.3.0 vs 43.20251217.3.0
-		if metal.Release > localVersion {
-			return CheckResult{
-				Status:  StatusNewer,
-				Remote:  metal.Release,
-				Message: fmt.Sprintf("Remote: %s (Local: %s)", metal.Release, localVersion),
+	// Find the ISO location
+	var downloadURL string
+	if isoImg, ok := metal.Formats["iso"]; ok {
+		downloadURL = isoImg.Disk.Location
+	} else if liveIso, ok := metal.Formats["live-iso"]; ok {
+		// Sometimes it's called live-iso in formats? Need to check specific stream data.
+		// The example log showed "vhd.xz" for azure.
+		// For metal, it's typically "iso" or "raw.xz".
+		downloadURL = liveIso.Disk.Location
+	}
+
+	targetDir := filepath.Dir(localPath)
+	remoteFilename := filepath.Base(downloadURL)
+	fullLocalPath := filepath.Join(targetDir, remoteFilename)
+
+	// Local version detection
+	var currentVersion string
+	reVer := regexp.MustCompile(`fedora-coreos-(\d+\.\d+\.\d+\.\d+)`)
+	entries, _ := os.ReadDir(targetDir)
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "fedora-coreos-") {
+			m := reVer.FindStringSubmatch(entry.Name())
+			if len(m) > 1 {
+				currentVersion = m[1]
 			}
-		}
-	}
-
-	return CheckResult{Status: StatusUpToDate, Remote: metal.Release}
-}
-
-func checkUbuntuVersion(remoteURL, localPath string) CheckResult {
-	// Example URL: https://cdimage.ubuntu.com/ubuntu-mate/releases/25.10/release/ubuntu-mate-25.10-desktop-amd64.iso
-	filename := filepath.Base(localPath)
-	re := regexp.MustCompile(`(\d+\.\d+)`)
-	matches := re.FindStringSubmatch(filename)
-	if len(matches) < 2 {
-		return CheckResult{Status: StatusError, Message: "Could not parse Ubuntu version from filename"}
-	}
-	localVersion := matches[1]
-
-	// Navigate up to find the releases base URL
-	// From .../releases/25.10/release/... to .../releases/
-	parts := strings.Split(remoteURL, "/")
-	var baseReleaseURL string
-	for i, part := range parts {
-		if part == "releases" {
-			baseReleaseURL = strings.Join(parts[:i+1], "/") + "/"
 			break
 		}
 	}
 
-	if baseReleaseURL == "" {
-		return CheckResult{Status: StatusError, Message: "Could not determine Ubuntu releases base URL"}
+	if _, err := os.Stat(fullLocalPath); err == nil {
+		return CheckResult{Status: StatusUpToDate, Current: metal.Release, Latest: metal.Release, ResolvedURL: downloadURL}
 	}
 
-	resp, err := http.Get(baseReleaseURL)
-	if err != nil {
-		return CheckResult{Status: StatusError, Message: "Failed to fetch directory listing: " + err.Error()}
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	// Find directories that look like versions: <a href="25.10/">
-	reDir := regexp.MustCompile(`href="(\d+\.\d+)/"`)
-	dirMatches := reDir.FindAllStringSubmatch(string(body), -1)
-
-	var versions []string
-	for _, m := range dirMatches {
-		versions = append(versions, m[1])
-	}
-	sort.Strings(versions)
-
-	if len(versions) > 0 {
-		latest := versions[len(versions)-1]
-		if latest > localVersion {
-			return CheckResult{
-				Status:  StatusNewer,
-				Remote:  latest,
-				Message: fmt.Sprintf("Remote: %s (Local: %s)", latest, localVersion),
-			}
+	if currentVersion != "" {
+		return CheckResult{
+			Status:      StatusNewer,
+			Current:     currentVersion,
+			Latest:      metal.Release,
+			ResolvedURL: downloadURL,
 		}
 	}
 
-	return CheckResult{Status: StatusUpToDate}
+	return CheckResult{
+		Status:      StatusNotFound,
+		Latest:      metal.Release,
+		ResolvedURL: downloadURL,
+	}
 }
 
-func checkKiwixVersion(remoteURL, localPath string) CheckResult {
-	// 1. Parse local filename to extract series and date
-	filename := filepath.Base(localPath)
-	// Expected format: series_lang_flavour_YYYY-MM.zim
-	// Example: phet_en_all_2025-03.zim
+func resolveKiwixFeed(src config.Source, localPath string) CheckResult {
+	series := src.Params["series"]
+	feedURL := src.Params["feed_url"]
 
-	re := regexp.MustCompile(`(.+)_(\d{4}-\d{2})\.zim$`)
-	matches := re.FindStringSubmatch(filename)
-	if len(matches) != 3 {
-		return CheckResult{Status: StatusError, Message: "Filename format not recognized for versioning"}
+	if series == "" || feedURL == "" {
+		return CheckResult{Status: StatusError, Message: "Missing series or feed_url params"}
 	}
 
-	seriesName := matches[1] // e.g., phet_en_all
-	localDateStr := matches[2]
-
-	localDate, err := time.Parse("2006-01", localDateStr)
-	if err != nil {
-		return CheckResult{Status: StatusError, Message: "Invalid local date format: " + err.Error()}
-	}
-
-	// 2. Query Kiwix API
-	// Use 'q' parameter which seems more robust for OPDS search
-	// We implement a fallback strategy: if strict search fails, strip suffix segments (after last _)
-	// until we get results or run out of meaningful tokens.
-	var feed Feed
+	// Use existing loop fallback logic adapted for params
+	// Search API with 'q'
+	// Recursive search strategy: strip last segment if not found
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	searchName := seriesName
+	var feed Feed
+
+	searchQuery := series
+	found := false
+
 	for {
-		query := url.QueryEscape(searchName)
-		apiURL := fmt.Sprintf("https://library.kiwix.org/catalog/v2/entries?lang=eng&q=%s", query)
-
-		resp, err := client.Get(apiURL)
+		searchURL := fmt.Sprintf("%s?q=%s", feedURL, url.QueryEscape(searchQuery))
+		resp, err := client.Get(searchURL)
 		if err != nil {
-			return CheckResult{Status: StatusError, Message: "API request failed: " + err.Error()}
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			return CheckResult{Status: StatusError, Message: fmt.Sprintf("API returned status: %d", resp.StatusCode)}
+			return CheckResult{Status: StatusError, Message: err.Error()}
 		}
 
 		if err := xml.NewDecoder(resp.Body).Decode(&feed); err != nil {
 			resp.Body.Close()
-			return CheckResult{Status: StatusError, Message: "Failed to parse API response: " + err.Error()}
+			return CheckResult{Status: StatusError, Message: "Failed to parse Kiwix feed: " + err.Error()}
 		}
 		resp.Body.Close()
 
 		if len(feed.Entries) > 0 {
+			found = true
 			break
 		}
 
 		// Strip last segment
-		lastUnderscore := strings.LastIndex(searchName, "_")
+		lastUnderscore := strings.LastIndex(searchQuery, "_")
 		if lastUnderscore == -1 {
-			// No more underscores, and full search yielded nothing.
-			return CheckResult{Status: StatusUpToDate, Message: "No matching remote entry found (checked " + seriesName + ")"}
+			break
 		}
-		searchName = searchName[:lastUnderscore]
+		searchQuery = searchQuery[:lastUnderscore]
 	}
 
-	// 3. Find matching entry
+	if !found {
+		return CheckResult{Status: StatusError, Message: fmt.Sprintf("No entry found for series '%s' (or prefixes)", series)}
+	}
+
+	// Find the latest entry for the specified series
 	var latestEntry *Entry
 	var latestDate time.Time
 
-	for _, entry := range feed.Entries {
-		entrySeries := entry.Name
-		if entry.Flavour != "" {
-			entrySeries += "_" + entry.Flavour
-		}
+	for i := range feed.Entries {
+		entry := &feed.Entries[i]
+		// Check if Name contains series (Entry.Name is typically the ID/Series name)
+		// Or contains the *original* series name requested
+		if strings.Contains(entry.Name, series) || (searchQuery != series && strings.Contains(entry.Name, searchQuery)) {
 
-		if entrySeries == seriesName {
 			// Parse Issued date
 			issuedDate, err := time.Parse(time.RFC3339, entry.Issued)
 			if err != nil {
-				// Try parsing simplified date if RFC3339 fails (though Kiwix seems consistent)
+				// Try simplified YYYY-MM-DD
 				issuedDate, err = time.Parse("2006-01-02", entry.Issued)
 				if err != nil {
 					continue
 				}
 			}
 
-			// Keep the latest one
 			if latestEntry == nil || issuedDate.After(latestDate) {
 				latestDate = issuedDate
-				entryPtr := entry
-				latestEntry = &entryPtr
+				latestEntry = entry
 			}
 		}
 	}
 
 	if latestEntry == nil {
-		return CheckResult{Status: StatusUpToDate, Message: "No matching remote entry found"}
+		return CheckResult{Status: StatusError, Message: fmt.Sprintf("No entry found for series '%s'", series)}
 	}
 
-	// 4. Compare Dates
-	// Local date is YYYY-MM (resolution: month)
-	// Remote is full date.
-	// If remote year/month is after local year/month => Newer.
-	// If same year/month => Up to date (we assume monthly releases mostly, or we can't distinguish with local filename).
+	remoteDateShort := latestDate.Format("2006-01")
 
-	localYear, localMonth, _ := localDate.Date()
-	remoteYear, remoteMonth, _ := latestDate.Date()
+	targetDir := filepath.Dir(localPath)
+	// Expected name pattern: series_remoteDateShort.zim
+	expectedFilename := fmt.Sprintf("%s_%s.zim", series, remoteDateShort)
+	fullLocalPath := filepath.Join(targetDir, expectedFilename)
 
-	if remoteYear > localYear || (remoteYear == localYear && remoteMonth > localMonth) {
+	// Local version detection
+	var currentVersion string
+	reDate := regexp.MustCompile(`_(\d{4}-\d{2})\.zim`)
+	entries, _ := os.ReadDir(targetDir)
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), series+"_") {
+			m := reDate.FindStringSubmatch(entry.Name())
+			if len(m) > 1 {
+				currentVersion = m[1]
+			}
+			break
+		}
+	}
+
+	if _, err := os.Stat(fullLocalPath); err == nil {
+		return CheckResult{Status: StatusUpToDate, Current: remoteDateShort, Latest: remoteDateShort}
+	}
+
+	if currentVersion != "" {
 		return CheckResult{
 			Status:  StatusNewer,
-			Remote:  latestDate.Format("2006-01-02"),
-			Message: fmt.Sprintf("Remote: %s (Local: %s)", latestDate.Format("2006-01-02"), localDateStr),
+			Current: currentVersion,
+			Latest:  remoteDateShort,
 		}
 	}
 
 	return CheckResult{
-		Status:  StatusUpToDate,
-		Remote:  latestDate.Format("2006-01-02"),
-		Message: "Local version matches latest remote month",
+		Status: StatusNotFound,
+		Latest: remoteDateShort,
 	}
 }
 
@@ -349,13 +507,13 @@ func checkHTTPHeader(url string, localInfo os.FileInfo) CheckResult {
 			if remoteLastMod.After(localInfo.ModTime()) {
 				return CheckResult{
 					Status:  StatusNewer,
-					Remote:  remoteLastModStr,
+					Latest:  remoteLastModStr,
 					Message: fmt.Sprintf("Remote: %s (Local: %s)", remoteLastModStr, localInfo.ModTime().Format(http.TimeFormat)),
 				}
 			}
 			return CheckResult{
 				Status: StatusUpToDate,
-				Remote: remoteLastModStr,
+				Latest: remoteLastModStr,
 			}
 		}
 	}

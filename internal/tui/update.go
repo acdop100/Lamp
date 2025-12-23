@@ -68,6 +68,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CheckMsg:
 		m.updateItemState(msg.Category, msg.Index, func(it *Item) {
 			it.LocalStatus = msg.Result.Status
+			it.CurrentVersion = msg.Result.Current
+			it.LatestVersion = msg.Result.Latest
 		})
 		return m, nil
 

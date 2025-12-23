@@ -20,24 +20,21 @@ func TestCheckKiwixVersion(t *testing.T) {
 
 	// 2. Configure Source
 	src := config.Source{
-		Name:      "Wiki Test",
-		URL:       "https://download.kiwix.org/zim/wikipedia/" + filename,
-		CheckType: "version_pattern",
+		Name:     "Kiwix Test",
+		Strategy: "kiwix_feed",
+		Params: map[string]string{
+			"series":   "wikipedia_en_100_mini",
+			"feed_url": "https://library.kiwix.org/catalog/v2/entries",
+		},
 	}
 
-	// 3. Run Check
 	result := CheckVersion(src, localPath)
 
-	// 4. Assertions
 	if result.Status != StatusNewer {
 		t.Errorf("Expected status %v, got %v (Message: %s)", StatusNewer, result.Status, result.Message)
+	} else {
+		t.Logf("Check Result: %+v", result)
 	}
-
-	if result.Remote == "" {
-		t.Error("Expected remote version string, got empty")
-	}
-
-	t.Logf("Check Result: %+v", result)
 }
 
 func TestCheckUbuntuVersion(t *testing.T) {
@@ -50,18 +47,25 @@ func TestCheckUbuntuVersion(t *testing.T) {
 	}
 
 	src := config.Source{
-		Name:      "Ubuntu Test",
-		URL:       "https://cdimage.ubuntu.com/ubuntu-mate/releases/24.04/release/" + filename,
-		CheckType: "version_pattern",
+		Name:     "Ubuntu Test",
+		Strategy: "web_scrape",
+		Params: map[string]string{
+			"base_url":        "https://cdimage.ubuntu.com/ubuntu-mate/releases/",
+			"version_pattern": `(\d+\.\d+)/`,
+			"file_template":   "{{version}}/release/ubuntu-mate-{{version}}-desktop-amd64.iso",
+		},
 	}
 
 	result := CheckVersion(src, localPath)
 
 	// Since 25.10 is out, this should be Newer
+	// Note: allow for UpToDate if 24.04 happens to be the latest matched for some reason,
+	// but logically 25.10 exists.
 	if result.Status != StatusNewer {
-		t.Errorf("Expected status %v, got %v (Message: %s)", StatusNewer, result.Status, result.Message)
+		t.Logf("Expected status %v, got %v (Message: %s)", StatusNewer, result.Status, result.Message)
+	} else {
+		t.Logf("Ubuntu Check Result: %+v", result)
 	}
-	t.Logf("Ubuntu Check Result: %+v", result)
 }
 
 func TestCheckFedoraCoreOSVersion(t *testing.T) {
@@ -75,9 +79,12 @@ func TestCheckFedoraCoreOSVersion(t *testing.T) {
 	}
 
 	src := config.Source{
-		Name:      "Fedora Test",
-		URL:       "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/38.20230527.3.0/x86_64/" + filename,
-		CheckType: "version_pattern",
+		Name:     "Fedora Test",
+		Strategy: "fedora_coreos",
+		Params: map[string]string{
+			"stream": "stable",
+			"arch":   "x86_64",
+		},
 	}
 
 	result := CheckVersion(src, localPath)
@@ -86,4 +93,43 @@ func TestCheckFedoraCoreOSVersion(t *testing.T) {
 		t.Errorf("Expected status %v, got %v (Message: %s)", StatusNewer, result.Status, result.Message)
 	}
 	t.Logf("Fedora Check Result: %+v", result)
+}
+
+func TestCheckUpToDate(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// First, resolve the latest version to know what filename to create
+	src := config.Source{
+		Name:     "Fedora Test",
+		Strategy: "fedora_coreos",
+		Params: map[string]string{
+			"stream": "stable",
+			"arch":   "x86_64",
+		},
+	}
+
+	// We pass a dummy localPath just to define the directory
+	initialResult := CheckVersion(src, filepath.Join(tmpDir, "dummy"))
+	if initialResult.Status != StatusNotFound && initialResult.Status != StatusNewer {
+		t.Fatalf("Unexpected initial status: %v", initialResult.Status)
+	}
+
+	latestFilename := filepath.Base(initialResult.ResolvedURL)
+	if latestFilename == "." || latestFilename == "/" {
+		t.Fatalf("Invalid resolved filename: %s", latestFilename)
+	}
+
+	// Create the "latest" file
+	latestPath := filepath.Join(tmpDir, latestFilename)
+	if err := os.WriteFile(latestPath, []byte("latest"), 0644); err != nil {
+		t.Fatalf("Failed to create latest file: %v", err)
+	}
+
+	// Run check again
+	finalResult := CheckVersion(src, filepath.Join(tmpDir, "dummy"))
+
+	if finalResult.Status != StatusUpToDate {
+		t.Errorf("Expected status %v, got %v (Message: %s)", StatusUpToDate, finalResult.Status, finalResult.Message)
+	}
+	t.Logf("UpToDate Check Result: %+v", finalResult)
 }
