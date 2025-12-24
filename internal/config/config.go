@@ -149,8 +149,8 @@ func expandSources(cfg *Config) {
 	for catName, cat := range cfg.Categories {
 		var expandedSources []Source
 		for _, src := range cat.Sources {
-			usesOS := len(src.Exclude) > 0
-			usesArch := len(src.Exclude) > 0
+			usesOS := false
+			usesArch := false
 			for _, v := range src.Params {
 				if strings.Contains(v, "{{os") || strings.Contains(v, "{{ext") {
 					usesOS = true
@@ -160,7 +160,35 @@ func expandSources(cfg *Config) {
 				}
 			}
 
-			if !usesOS && !usesArch {
+			// Allow overriding display logic
+			if src.Params["force_os_display"] == "true" {
+				usesOS = true
+			}
+			if src.Params["arch_override"] != "" {
+				usesArch = true // Force arch usage if override is present
+			}
+
+			// Check if exclude list contains OS-specific exclusions (e.g., "linux/amd64")
+			// If so, we need to iterate over OS values even if params don't use OS
+			needsOSIteration := usesOS
+			needsArchIteration := usesArch
+			for _, ex := range src.Exclude {
+				if strings.Contains(ex, "/") {
+					// Exclude contains OS/arch combo, need to iterate both
+					needsOSIteration = true
+					needsArchIteration = true
+				} else if !usesArch && !usesOS {
+					// Simple exclusion like "arm64" or "macos"
+					// Try to determine if it's an OS or arch
+					if ex == "linux" || ex == "macos" || ex == "darwin" || ex == "windows" {
+						needsOSIteration = true
+					} else {
+						needsArchIteration = true
+					}
+				}
+			}
+
+			if !needsOSIteration && !needsArchIteration {
 				expandedSources = append(expandedSources, src)
 				continue
 			}
@@ -170,12 +198,12 @@ func expandSources(cfg *Config) {
 			// If not using Arch, treat as single iteration [""]
 
 			osList := []string{""}
-			if usesOS {
+			if needsOSIteration {
 				osList = cfg.General.OS
 			}
 
 			archList := []string{""}
-			if usesArch {
+			if needsArchIteration {
 				archList = cfg.General.Arch
 			}
 
@@ -208,7 +236,8 @@ func expandSources(cfg *Config) {
 
 					if existing, ok := seen[key]; ok {
 						// If identical, append arch to name if not already there
-						if usesArch && archName != "" {
+						// BUT: Don't append if arch_override is set, as it already represents the intended display
+						if usesArch && archName != "" && src.Params["arch_override"] == "" {
 							if !strings.Contains(existing.Name, archName) {
 								// Try to find the closing bracket
 								if strings.HasSuffix(existing.Name, "]") {
@@ -224,8 +253,13 @@ func expandSources(cfg *Config) {
 					if usesOS && osName != "" {
 						suffixParts = append(suffixParts, osName)
 					}
-					if usesArch && archName != "" {
-						suffixParts = append(suffixParts, archName)
+					if usesArch {
+						// Use override if present, otherwise use expanded arch name
+						if override := src.Params["arch_override"]; override != "" {
+							suffixParts = append(suffixParts, override)
+						} else if archName != "" {
+							suffixParts = append(suffixParts, archName)
+						}
 					}
 
 					if len(suffixParts) > 0 {
@@ -236,7 +270,11 @@ func expandSources(cfg *Config) {
 						newSrc.OS = osName
 					}
 					if usesArch {
-						newSrc.Arch = archName
+						if override := src.Params["arch_override"]; override != "" {
+							newSrc.Arch = override
+						} else {
+							newSrc.Arch = archName
+						}
 					}
 
 					seen[key] = &newSrc
@@ -288,14 +326,6 @@ func substituteParams(src *Source, osName, archName string) {
 		archVLC = "intel64"
 	}
 
-	// melonDS: x86_64, aarch64 (linux), universal (macos)
-	archMelon := archFedora
-	osMelon := "appimage"
-	if osName == "macos" {
-		archMelon = "universal"
-		osMelon = "macOS"
-	}
-
 	// mGBA: x64, arm64 (linux), macos/osx (macos)
 	archMGBA := "-" + archElectron
 	osMGBA := "appimage"
@@ -342,14 +372,12 @@ func substituteParams(src *Source, osName, archName string) {
 		v = strings.ReplaceAll(v, "{{os}}", osName)
 		v = strings.ReplaceAll(v, "{{os_short}}", osShort)
 		v = strings.ReplaceAll(v, "{{os_proper}}", osProper)
-		v = strings.ReplaceAll(v, "{{os_melon}}", osMelon)
 		v = strings.ReplaceAll(v, "{{os_mgba}}", osMGBA)
 		v = strings.ReplaceAll(v, "{{os_balena}}", osBalena)
 		v = strings.ReplaceAll(v, "{{arch}}", archName)
 		v = strings.ReplaceAll(v, "{{arch_fedora}}", archFedora)
 		v = strings.ReplaceAll(v, "{{arch_electron}}", archElectron)
 		v = strings.ReplaceAll(v, "{{arch_vlc}}", archVLC)
-		v = strings.ReplaceAll(v, "{{arch_melon}}", archMelon)
 		v = strings.ReplaceAll(v, "{{arch_mgba}}", archMGBA)
 		v = strings.ReplaceAll(v, "{{arch_balena}}", archBalena)
 		v = strings.ReplaceAll(v, "{{arch_jellyfin}}", archJellyfin)

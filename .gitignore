@@ -1,5 +1,5 @@
 /.DS_Store
 /Downloads
-/config.yaml
+# /config.yaml
 /.env
 /tui-dl

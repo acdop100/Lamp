@@ -70,7 +70,7 @@ type FedoraImage struct {
 	} `json:"disk"`
 }
 
-// Kiwix XML Feed Structures
+// Kiwix XML Feed Structures (Atom)
 type Feed struct {
 	XMLName xml.Name `xml:"feed"`
 	Entries []Entry  `xml:"entry"`
@@ -80,6 +80,22 @@ type Entry struct {
 	Name    string `xml:"name"`
 	Flavour string `xml:"flavour"`
 	Issued  string `xml:"issued"` // Format: 2025-10-16T00:00:00Z
+}
+
+// RSS 2.0 Structures
+type RSS struct {
+	XMLName xml.Name   `xml:"rss"`
+	Channel RSSChannel `xml:"channel"`
+}
+
+type RSSChannel struct {
+	Items []RSSItem `xml:"item"`
+}
+
+type RSSItem struct {
+	Title   string `xml:"title"`
+	Link    string `xml:"link"`
+	PubDate string `xml:"pubDate"`
 }
 
 func CheckVersion(src config.Source, localPath string, githubToken string) CheckResult {
@@ -101,6 +117,8 @@ func CheckVersion(src config.Source, localPath string, githubToken string) Check
 		return resolveKiwixFeed(src, localPath)
 	case "github_release":
 		return resolveGithubRelease(src, localPath, githubToken)
+	case "rss_feed":
+		return resolveRSSFeed(src, localPath)
 	default:
 		// Fallback for direct URLs (legacy behavior)
 		if src.URL != "" {
@@ -510,6 +528,99 @@ func resolveKiwixFeed(src config.Source, localPath string) CheckResult {
 	return CheckResult{
 		Status: StatusNotFound,
 		Latest: remoteDateShort,
+	}
+}
+
+func resolveRSSFeed(src config.Source, localPath string) CheckResult {
+	feedURL := src.Params["feed_url"]
+	itemPattern := src.Params["item_pattern"]
+	versionPattern := src.Params["version_pattern"]
+
+	if feedURL == "" || itemPattern == "" || versionPattern == "" {
+		return CheckResult{Status: StatusError, Message: "Missing rss_feed params"}
+	}
+
+	resp, err := http.Get(feedURL)
+	if err != nil {
+		return CheckResult{Status: StatusError, Message: "Failed to fetch RSS: " + err.Error()}
+	}
+	defer resp.Body.Close()
+
+	var rss RSS
+	if err := xml.NewDecoder(resp.Body).Decode(&rss); err != nil {
+		return CheckResult{Status: StatusError, Message: "Failed to parse RSS: " + err.Error()}
+	}
+
+	reItem, err := regexp.Compile(itemPattern)
+	if err != nil {
+		return CheckResult{Status: StatusError, Message: "Invalid item_pattern regex"}
+	}
+	reVersion, err := regexp.Compile(versionPattern)
+	if err != nil {
+		return CheckResult{Status: StatusError, Message: "Invalid version_pattern regex"}
+	}
+
+	var bestItem *RSSItem
+	var latestVersion string
+
+	for i := range rss.Channel.Items {
+		item := &rss.Channel.Items[i]
+		if reItem.MatchString(item.Title) || reItem.MatchString(item.Link) {
+			// Extract version
+			m := reVersion.FindStringSubmatch(item.Title)
+			if len(m) == 0 {
+				m = reVersion.FindStringSubmatch(item.Link)
+			}
+
+			if len(m) > 1 {
+				v := m[1]
+				// RSS items are usually sorted by date (newest first)
+				bestItem = item
+				latestVersion = v
+				break
+			}
+		}
+	}
+
+	if bestItem == nil {
+		return CheckResult{Status: StatusError, Message: "No matching items found in RSS feed"}
+	}
+
+	downloadURL := bestItem.Link
+	targetDir := filepath.Dir(localPath)
+	remoteFilename := filepath.Base(downloadURL)
+	fullLocalPath := filepath.Join(targetDir, remoteFilename)
+
+	// Local version detection
+	var currentVersion string
+	entries, _ := os.ReadDir(targetDir)
+	for _, entry := range entries {
+		if !entry.IsDir() && reItem.MatchString(entry.Name()) {
+			m := reVersion.FindStringSubmatch(entry.Name())
+			if len(m) > 1 {
+				currentVersion = m[1]
+				break
+			}
+		}
+	}
+
+	if _, err := os.Stat(fullLocalPath); err == nil {
+		return CheckResult{Status: StatusUpToDate, Current: latestVersion, Latest: latestVersion, ResolvedURL: downloadURL}
+	}
+
+	if currentVersion != "" {
+		return CheckResult{
+			Status:      StatusNewer,
+			Current:     currentVersion,
+			Latest:      latestVersion,
+			ResolvedURL: downloadURL,
+		}
+	}
+
+	return CheckResult{
+		Status:      StatusNotFound,
+		Latest:      latestVersion,
+		ResolvedURL: downloadURL,
 	}
 }
 

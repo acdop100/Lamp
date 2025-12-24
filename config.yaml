@@ -25,10 +25,13 @@ categories:
     path: "./Downloads/Apps"
     sources:
       - id: "balena-etcher"
+      - id: "kiwix-desktop"
+      - id: "kiwix-macos"
   Games:
     path: "./Downloads/Games"
     sources:
       - id: "melonds"
+      - id: "melonds-macos"
       - id: "mgba"
   Media:
     path: "./Downloads/Media"

@@ -1,0 +1,32 @@
+sources:
+  - id: "balena-etcher"
+    name: "BalenaEtcher"
+    strategy: "github_release"
+    params:
+      repo: "balena-io/etcher"
+      # New v2.x format: balenaEtcher-2.1.4-arm64.dmg (macOS)
+      # Linux: balenaEtcher-linux-x64-2.1.4.zip
+      asset_pattern: "balenaEtcher-.*{{os_balena}}{{arch_balena}}.*\\.{{ext_balena}}"
+    exclude: ["linux/arm64"]
+
+  - id: "kiwix-desktop"
+    name: "Kiwix Desktop"
+    strategy: "rss_feed"
+    params:
+      feed_url: "https://download.kiwix.org/release/kiwix-desktop/feed.xml"
+      item_pattern: "kiwix-desktop_.*{{arch_fedora}}_.*\\.appimage"
+      version_pattern: "(\\d+\\.\\d+\\.\\d+)"
+      force_os_display: "true"
+    exclude: ["macos", "arm64", "linux/arm64"]
+
+  - id: "kiwix-macos"
+    name: "Kiwix Desktop" # Same name to group logically if sorted, or distinct
+    strategy: "rss_feed"
+    params:
+      feed_url: "https://download.kiwix.org/release/kiwix-macos/feed.xml"
+      item_pattern: "kiwix-macos_.*\\.dmg"
+      version_pattern: "(\\d+\\.\\d+\\.\\d+)"
+      force_os_display: "true"
+      arch_override: "universal"
+    exclude: ["linux", "amd64"]
+

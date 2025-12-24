@@ -18,56 +18,6 @@
 #   {{ext}}           - Generic extension: "zip" for linux, "dmg" for macos
 #
 sources:
-  - id: "ubuntu-mate"
-    name: "Ubuntu Mate"
-    strategy: "web_scrape"
-    params:
-      base_url: "https://cdimage.ubuntu.com/ubuntu-mate/releases/"
-      # Find directories like "25.10/"
-      version_pattern: '(\d+\.\d+)/'
-      # Construct the ISO URL: base + version + template
-      file_template: "{{version}}/release/ubuntu-mate-{{version}}-desktop-{{arch}}.iso"
-    exclude: ["arm64"] # Only amd64 ISOs available
-
-  - id: "fedora-coreos"
-    name: "Fedora CoreOS"
-    strategy: "fedora_coreos"
-    params:
-      stream: "stable"
-      arch: "{{arch_fedora}}" # map amd64->x86_64
-      artifact_type: "metal"
-
-  - id: "kiwix-wikipedia"
-    name: "Wikipedia English (100 articles)"
-    strategy: "kiwix_feed"
-    params:
-      series: "wikipedia_en_100_mini"
-      feed_url: "https://library.kiwix.org/catalog/v2/entries"
-
-  - id: "kiwix-phet"
-    name: "PhET Interactive Simulations"
-    strategy: "kiwix_feed"
-    params:
-      series: "phet_en_all"
-      feed_url: "https://library.kiwix.org/catalog/v2/entries"
-
-  - id: "kiwix-openstreetmap"
-    name: "OpenStreetMap"
-    strategy: "kiwix_feed"
-    params:
-      series: "openstreetmap-wiki_en_all_maxi"
-      feed_url: "https://library.kiwix.org/catalog/v2/entries"
-
-  - id: "balena-etcher"
-    name: "BalenaEtcher"
-    strategy: "github_release"
-    params:
-      repo: "balena-io/etcher"
-      # New v2.x format: balenaEtcher-2.1.4-arm64.dmg (macOS)
-      # Linux: balenaEtcher-linux-x64-2.1.4.zip
-      asset_pattern: "balenaEtcher-.*{{os_balena}}{{arch_balena}}.*\\.{{ext_balena}}"
-    exclude: ["linux/arm64"]
-
   # --- Games ---
   - id: "melonds"
     name: "melonDS"
@@ -75,8 +25,20 @@ sources:
     params:
       repo: "melonDS-emu/melonDS"
       # melonDS-1.1-appimage-x86_64.zip
+      force_os_display: "true"
+      asset_pattern: "melonDS-.*-appimage-{{arch_fedora}}.*"
+    exclude: ["macos"]
+
+  - id: "melonds-macos"
+    name: "melonDS"
+    strategy: "github_release"
+    params:
+      repo: "melonDS-emu/melonDS"
       # melonDS-1.1-macOS-universal.zip
-      asset_pattern: "melonDS-.*-{{os_melon}}-{{arch_melon}}.*"
+      force_os_display: "true"
+      asset_pattern: "melonDS-.*-macOS-universal.zip"
+      arch_override: "universal"
+    exclude: ["linux"]
 
   - id: "mgba"
     name: "mGBA"
@@ -96,6 +58,7 @@ sources:
       version_pattern: '(\d+\.\d+\.\d+)/'
       # Construct: 3.0.21/macosx/vlc-3.0.21-intel64.dmg
       file_template: "{{version}}/macosx/vlc-{{version}}-{{arch_vlc}}.dmg"
+      force_os_display: "true"
     exclude: ["linux"] # Linux VLC is usually via package manager, scraping source is messy
 
   - id: "jellyfin-player"
@@ -106,4 +69,5 @@ sources:
       # JellyfinMediaPlayer-1.12.0-AppleSilicon.dmg
       # JellyfinMediaPlayer-1.12.0-Intel.dmg
       asset_pattern: "JellyfinMediaPlayer-.*-{{arch_jellyfin}}\\.dmg"
+      force_os_display: "true"
     exclude: ["linux"] # Only .deb packages available for Linux

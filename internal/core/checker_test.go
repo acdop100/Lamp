@@ -133,3 +133,32 @@ func TestCheckUpToDate(t *testing.T) {
 	}
 	t.Logf("UpToDate Check Result: %+v", finalResult)
 }
+
+func TestCheckRSSVersion(t *testing.T) {
+	// 1. Create a dummy old version
+	tmpDir := t.TempDir()
+	filename := "kiwix-desktop_x86_64_2.4.0.appimage"
+	localPath := filepath.Join(tmpDir, filename)
+	if err := os.WriteFile(localPath, []byte("dummy"), 0644); err != nil {
+		t.Fatalf("Failed to create dummy file: %v", err)
+	}
+
+	// 2. Configure Source
+	src := config.Source{
+		Name:     "RSS Test",
+		Strategy: "rss_feed",
+		Params: map[string]string{
+			"feed_url":        "https://download.kiwix.org/release/kiwix-desktop/feed.xml",
+			"item_pattern":    `kiwix-desktop_x86_64_.*\.appimage`,
+			"version_pattern": `(\d+\.\d+\.\d+)`,
+		},
+	}
+
+	result := CheckVersion(src, localPath, "")
+
+	// 2.4.1 is current latest as of now
+	if result.Status != StatusNewer {
+		t.Errorf("Expected status %v, got %v (Message: %s)", StatusNewer, result.Status, result.Message)
+	}
+	t.Logf("RSS Check Result: %+v", result)
+}
