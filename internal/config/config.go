@@ -303,6 +303,8 @@ func substituteParams(src *Source, osName, archName string) {
 		ext = "zip" // balena uses zip for linux
 	} else if osName == "macos" || osName == "darwin" {
 		ext = "dmg"
+	} else if osName == "windows" {
+		ext = "zip" // default for windows downloads
 	}
 
 	// Arch
@@ -322,8 +324,21 @@ func substituteParams(src *Source, osName, archName string) {
 
 	// VLC: amd64->intel64 (or blank), arm64->arm64
 	archVLC := archName
-	if archName == "amd64" {
-		archVLC = "intel64"
+	osVLC := osName
+	if osName == "macos" {
+		osVLC = "macosx"
+		if archName == "amd64" {
+			archVLC = "intel64"
+		}
+	} else if osName == "windows" {
+		if archName == "arm64" {
+			osVLC = "win-arm64"
+			archVLC = "win-arm64"
+		} else {
+			osVLC = "win64"
+			archVLC = "win64"
+		}
+		ext = "exe"
 	}
 
 	// mGBA: x64, arm64 (linux), macos/osx (macos)
@@ -336,6 +351,12 @@ func substituteParams(src *Source, osName, archName string) {
 		} else {
 			osMGBA = "macos" // Modern ARM/Universal use macos marker
 		}
+	} else if osName == "windows" {
+		// mGBA-0.10.3-win64.7z or mGBA-0.10.3-win64-setup.exe
+		// They don't have native arm64 windows build, fallback to win64
+		osMGBA = "win64"
+		archMGBA = ""
+		ext = "7z"
 	}
 
 	// Jellyfin: Intel, AppleSilicon
@@ -346,11 +367,16 @@ func substituteParams(src *Source, osName, archName string) {
 		} else if archName == "arm64" {
 			archJellyfin = "AppleSilicon"
 		}
+	} else if osName == "windows" {
+		// No native arm64 binary yet, fallback to x64
+		archJellyfin = "windows-x64"
+		ext = "exe"
 	}
 
 	// BalenaEtcher: New v2.x naming
 	// macOS: balenaEtcher-2.1.4-arm64.dmg, balenaEtcher-2.1.4-x64.dmg
 	// Linux: balenaEtcher-linux-x64-2.1.4.zip
+	// Windows: balenaEtcher-Setup-2.1.4.exe
 	osBalena := ""
 	archBalena := archElectron
 	if osName == "linux" {
@@ -359,13 +385,43 @@ func substituteParams(src *Source, osName, archName string) {
 		// For Balena, macOS assets distinguish by arm64 vs x64 directly in the name
 		// We'll use archElectron which is already x64/arm64
 		archBalena = archElectron
+	} else if osName == "windows" {
+		osBalena = "Setup"
+		archBalena = "" // Windows setup doesn't always have arch in name for x64
+		ext = "exe"
 	}
 	extBalena := ext
+
+	// melonDS
+	osMelon := "appimage"
+	archMelon := archFedora
+	if osName == "macos" {
+		osMelon = "macOS"
+		archMelon = "universal"
+	} else if osName == "windows" {
+		osMelon = "windows"
+		if archName == "arm64" {
+			archMelon = "aarch64"
+		} else {
+			archMelon = "x86_64"
+		}
+		ext = "zip"
+	}
+
+	// Kiwix
+	osKiwix := "linux"
+	if osName == "macos" {
+		osKiwix = "macos"
+	} else if osName == "windows" {
+		osKiwix = "windows"
+	}
 
 	// OS naming variations
 	osProper := "Linux"
 	if osName == "macos" {
 		osProper = "macOS"
+	} else if osName == "windows" {
+		osProper = "Windows"
 	}
 
 	for k, v := range src.Params {
@@ -374,6 +430,9 @@ func substituteParams(src *Source, osName, archName string) {
 		v = strings.ReplaceAll(v, "{{os_proper}}", osProper)
 		v = strings.ReplaceAll(v, "{{os_mgba}}", osMGBA)
 		v = strings.ReplaceAll(v, "{{os_balena}}", osBalena)
+		v = strings.ReplaceAll(v, "{{os_vlc}}", osVLC)
+		v = strings.ReplaceAll(v, "{{os_melon}}", osMelon)
+		v = strings.ReplaceAll(v, "{{os_kiwix}}", osKiwix)
 		v = strings.ReplaceAll(v, "{{arch}}", archName)
 		v = strings.ReplaceAll(v, "{{arch_fedora}}", archFedora)
 		v = strings.ReplaceAll(v, "{{arch_electron}}", archElectron)
@@ -381,6 +440,7 @@ func substituteParams(src *Source, osName, archName string) {
 		v = strings.ReplaceAll(v, "{{arch_mgba}}", archMGBA)
 		v = strings.ReplaceAll(v, "{{arch_balena}}", archBalena)
 		v = strings.ReplaceAll(v, "{{arch_jellyfin}}", archJellyfin)
+		v = strings.ReplaceAll(v, "{{arch_melon}}", archMelon)
 		v = strings.ReplaceAll(v, "{{ext}}", ext)
 		v = strings.ReplaceAll(v, "{{ext_balena}}", extBalena)
 		src.Params[k] = v

@@ -14,7 +14,7 @@ sources:
     strategy: "rss_feed"
     params:
       feed_url: "https://download.kiwix.org/release/kiwix-desktop/feed.xml"
-      item_pattern: "kiwix-desktop_.*{{arch_fedora}}_.*\\.appimage"
+      item_pattern: "kiwix-{{os_kiwix}}_.*{{arch_fedora}}_.*\\.{{ext}}"
       version_pattern: "(\\d+\\.\\d+\\.\\d+)"
       force_os_display: "true"
     exclude: ["macos", "arm64", "linux/arm64"]

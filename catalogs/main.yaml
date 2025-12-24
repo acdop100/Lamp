@@ -25,8 +25,9 @@ sources:
     params:
       repo: "melonDS-emu/melonDS"
       # melonDS-1.1-appimage-x86_64.zip
+      # melonDS-1.1-win-x64.zip
       force_os_display: "true"
-      asset_pattern: "melonDS-.*-appimage-{{arch_fedora}}.*"
+      asset_pattern: "melonDS-.*-{{os_melon}}-{{arch_melon}}.*"
     exclude: ["macos"]
 
   - id: "melonds-macos"
@@ -38,7 +39,7 @@ sources:
       force_os_display: "true"
       asset_pattern: "melonDS-.*-macOS-universal.zip"
       arch_override: "universal"
-    exclude: ["linux"]
+    exclude: ["linux", "windows"]
 
   - id: "mgba"
     name: "mGBA"
@@ -47,6 +48,7 @@ sources:
       repo: "mgba-emu/mgba"
       # mGBA-0.10.3-macos.dmg
       # mGBA-0.10.3-appimage-x64.appimage
+      # mGBA-0.10.3-win64.7z
       asset_pattern: "mGBA-.*-{{os_mgba}}{{arch_mgba}}.*"
 
   # --- Media ---
@@ -57,7 +59,8 @@ sources:
       base_url: "https://get.videolan.org/vlc/"
       version_pattern: '(\d+\.\d+\.\d+)/'
       # Construct: 3.0.21/macosx/vlc-3.0.21-intel64.dmg
-      file_template: "{{version}}/macosx/vlc-{{version}}-{{arch_vlc}}.dmg"
+      # Construct: 3.0.21/win64/vlc-3.0.21-win64.exe
+      file_template: "{{version}}/{{os_vlc}}/vlc-{{version}}-{{arch_vlc}}.{{ext}}"
       force_os_display: "true"
     exclude: ["linux"] # Linux VLC is usually via package manager, scraping source is messy
 
@@ -68,6 +71,7 @@ sources:
       repo: "jellyfin/jellyfin-media-player"
       # JellyfinMediaPlayer-1.12.0-AppleSilicon.dmg
       # JellyfinMediaPlayer-1.12.0-Intel.dmg
-      asset_pattern: "JellyfinMediaPlayer-.*-{{arch_jellyfin}}\\.dmg"
+      # JellyfinMediaPlayer-1.12.0-windows-x64.exe
+      asset_pattern: "JellyfinMediaPlayer-.*-{{arch_jellyfin}}\\.{{ext}}"
       force_os_display: "true"
     exclude: ["linux"] # Only .deb packages available for Linux

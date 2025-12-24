@@ -3,10 +3,11 @@ storage:
 
 general:
   os:
-    - "linux"
+    # - "linux"
     - "macos"
+    - "windows"
   arch:
-    - "amd64"
+    # - "amd64"
     - "arm64"
 
 categories:

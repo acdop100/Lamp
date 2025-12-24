@@ -12,7 +12,7 @@ import (
 	"tui-dl/internal/downloader"
 
 	"github.com/charmbracelet/bubbles/filepicker"
-	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -38,46 +38,34 @@ type Item struct {
 	Total          int64
 }
 
-func (i Item) Title() string {
-	if i.Source.Name != "" {
-		return i.Source.Name
-	}
-	if i.Source.ID != "" {
-		return fmt.Sprintf("ID: %s", i.Source.ID)
-	}
-	return "Unnamed Source"
+func (i Item) normalizeVer(v string) string {
+	return strings.TrimLeft(v, "v")
 }
-func (i Item) Description() string {
+
+func (i Item) ToRow() table.Row {
 	status := string(i.LocalStatus)
-
-	// Helper to normalize version strings (strip leading 'v's)
-	normalizeVer := func(v string) string {
-		return strings.TrimLeft(v, "v")
-	}
-
 	if i.LocalStatus == core.StatusError {
-		return fmt.Sprintf("Error: %s", i.LocalMessage)
+		status = "Error: " + i.LocalMessage
 	}
 
-	if i.LocalStatus == core.StatusUpToDate && i.CurrentVersion != "" {
-		return fmt.Sprintf("Up to Date [v%s]", normalizeVer(i.CurrentVersion))
+	current := i.normalizeVer(i.CurrentVersion)
+	latest := i.normalizeVer(i.LatestVersion)
+
+	return table.Row{
+		i.Source.Name,
+		status,
+		current,
+		latest,
 	}
-	if i.LocalStatus == core.StatusNewer && i.CurrentVersion != "" && i.LatestVersion != "" {
-		return fmt.Sprintf("Newer Version Available [v%s -> v%s]", normalizeVer(i.CurrentVersion), normalizeVer(i.LatestVersion))
-	}
-	if i.LatestVersion != "" && i.LocalStatus != core.StatusUpToDate && i.LocalStatus != core.StatusNewer {
-		return fmt.Sprintf("%s [Latest: v%s]", status, normalizeVer(i.LatestVersion))
-	}
-	return status
 }
-func (i Item) FilterValue() string { return i.Source.Name }
 
 type Model struct {
 	Config     *config.Config
 	State      state
 	Tabs       []string
 	ActiveTab  int
-	Lists      []list.Model
+	Tables     []table.Model
+	TableData  [][]Item // Raw data for each table
 	Filepicker filepicker.Model
 	Viewport   viewport.Model
 	Width      int
@@ -91,32 +79,52 @@ func NewModel(cfg *config.Config) Model {
 	}
 	sort.Strings(tabs)
 
-	// Earthy colors for the list
-	d := list.NewDefaultDelegate()
-	d.Styles.SelectedTitle = d.Styles.SelectedTitle.
-		Foreground(lipgloss.AdaptiveColor{Light: "#2D5A27", Dark: "#78B159"}).
-		BorderForeground(lipgloss.AdaptiveColor{Light: "#2D5A27", Dark: "#78B159"})
-	d.Styles.SelectedDesc = d.Styles.SelectedDesc.
-		Foreground(lipgloss.AdaptiveColor{Light: "#5D8A47", Dark: "#A8D199"}).
-		BorderForeground(lipgloss.AdaptiveColor{Light: "#2D5A27", Dark: "#78B159"})
+	columns := []table.Column{
+		{Title: "NAME", Width: 40},
+		{Title: "STATUS", Width: 35},
+		{Title: "CURRENT", Width: 15},
+		{Title: "LATEST", Width: 15},
+	}
 
-	lists := make([]list.Model, len(tabs))
+	tables := make([]table.Model, len(tabs))
+	tableData := make([][]Item, len(tabs))
+
 	for i, catName := range tabs {
 		cat := cfg.Categories[catName]
-		items := []list.Item{}
+		var rows []table.Row
+		var items []Item
 		for _, src := range cat.Sources {
-			items = append(items, Item{
+			it := Item{
 				Source:      src,
 				Category:    catName,
 				LocalStatus: "Not Checked",
-			})
+			}
+			items = append(items, it)
+			rows = append(rows, it.ToRow())
 		}
-		lists[i] = list.New(items, d, 0, 0)
-		lists[i].Title = fmt.Sprintf("Category: %s", catName)
-		lists[i].SetShowHelp(false)
-		lists[i].Styles.Title = lists[i].Styles.Title.
-			Background(lipgloss.AdaptiveColor{Light: "#A0522D", Dark: "#CD853F"}).
-			Foreground(lipgloss.Color("#FFFFFF"))
+		tableData[i] = items
+
+		t := table.New(
+			table.WithColumns(columns),
+			table.WithRows(rows),
+			table.WithFocused(true),
+			table.WithHeight(10),
+		)
+
+		s := table.DefaultStyles()
+		s.Header = s.Header.
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color("240")).
+			BorderBottom(true).
+			Bold(false).
+			Foreground(lipgloss.AdaptiveColor{Light: "#A0522D", Dark: "#CD853F"})
+		s.Selected = s.Selected.
+			Foreground(lipgloss.AdaptiveColor{Light: "#2D5A27", Dark: "#78B159"}).
+			Background(lipgloss.AdaptiveColor{Light: "#E1C699", Dark: "#2D5A27"}).
+			Bold(true)
+		t.SetStyles(s)
+
+		tables[i] = t
 	}
 
 	fp := filepicker.New()
@@ -129,8 +137,28 @@ func NewModel(cfg *config.Config) Model {
 		State:      stateList,
 		Tabs:       tabs,
 		ActiveTab:  0,
-		Lists:      lists,
+		Tables:     tables,
+		TableData:  tableData,
 		Filepicker: fp,
+	}
+}
+
+func (m *Model) resizeTableColumns(width int) {
+	// Account for some padding/borders
+	usableWidth := width - 10
+	if usableWidth < 40 {
+		usableWidth = 40
+	}
+
+	columns := []table.Column{
+		{Title: "NAME", Width: int(float64(usableWidth) * 0.40)},
+		{Title: "STATUS", Width: int(float64(usableWidth) * 0.35)},
+		{Title: "CURRENT", Width: int(float64(usableWidth) * 0.12)},
+		{Title: "LATEST", Width: int(float64(usableWidth) * 0.12)},
+	}
+
+	for i := range m.Tables {
+		m.Tables[i].SetColumns(columns)
 	}
 }
 

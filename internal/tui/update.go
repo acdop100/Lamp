@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"tui-dl/internal/core"
 
+	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dustin/go-humanize"
 )
@@ -25,36 +26,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "u":
 			// Trigger update check for all items in active category
 			var cmds []tea.Cmd
-			items := m.Lists[m.ActiveTab].Items()
-			for i, item := range items {
-				it := item.(Item)
+			items := m.TableData[m.ActiveTab]
+			for i, it := range items {
 				target := m.Config.GetTargetPath(it.Category, it.Source)
 				cmds = append(cmds, checkSourceCmd(i, it.Category, it.Source, target, m.Config.General.GitHubToken))
 			}
 			return m, tea.Batch(cmds...)
 		case "d":
 			// Download selected item
-			idx := m.Lists[m.ActiveTab].Index()
-			it := m.Lists[m.ActiveTab].SelectedItem().(Item)
+			idx := m.Tables[m.ActiveTab].Cursor()
+			if idx < 0 || idx >= len(m.TableData[m.ActiveTab]) {
+				return m, nil
+			}
+			it := m.TableData[m.ActiveTab][idx]
 			target := m.Config.GetTargetPath(it.Category, it.Source)
 
 			it.LocalStatus = "Starting download..."
-			m.Lists[m.ActiveTab].SetItem(idx, it)
+			m.TableData[m.ActiveTab][idx] = it
+			m.syncTableRows(m.ActiveTab)
 
 			return m, DownloadCmd(idx, it.Category, it.Source, target, m.Config.General.GitHubToken)
 		case "D":
 			// Download all missing files in current tab
 			var cmds []tea.Cmd
-			items := m.Lists[m.ActiveTab].Items()
-			for i, item := range items {
-				it := item.(Item)
+			items := m.TableData[m.ActiveTab]
+			for i, it := range items {
 				if it.LocalStatus == "Local File Not Found" || it.LocalStatus == "Not Checked" {
 					target := m.Config.GetTargetPath(it.Category, it.Source)
 					it.LocalStatus = "Queued for download..."
-					m.Lists[m.ActiveTab].SetItem(i, it)
+					m.TableData[m.ActiveTab][i] = it
 					cmds = append(cmds, DownloadCmd(i, it.Category, it.Source, target, m.Config.General.GitHubToken))
 				}
 			}
+			m.syncTableRows(m.ActiveTab)
 			return m, tea.Batch(cmds...)
 		case "f":
 			m.State = stateFolderSelect
@@ -133,14 +137,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.Width, m.Height = msg.Width, msg.Height
-		for i := range m.Lists {
-			m.Lists[i].SetSize(msg.Width, msg.Height-5) // Reserve space for tabs
+		m.resizeTableColumns(msg.Width)
+		for i := range m.Tables {
+			m.Tables[i].SetHeight(msg.Height - 11) // Reserve space for tabs, headers, footer
 		}
 	}
 
 	switch m.State {
 	case stateList:
-		m.Lists[m.ActiveTab], cmd = m.Lists[m.ActiveTab].Update(msg)
+		m.Tables[m.ActiveTab], cmd = m.Tables[m.ActiveTab].Update(msg)
 	case stateFolderSelect:
 		m.Filepicker, cmd = m.Filepicker.Update(msg)
 		if didSelect, _ := m.Filepicker.DidSelectDisabledFile(msg); didSelect {
@@ -157,13 +162,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) updateItemState(category string, index int, updateFn func(*Item)) {
 	for i, tab := range m.Tabs {
 		if tab == category {
-			items := m.Lists[i].Items()
-			if index >= 0 && index < len(items) {
-				it := items[index].(Item)
-				updateFn(&it)
-				m.Lists[i].SetItem(index, it)
+			if index >= 0 && index < len(m.TableData[i]) {
+				updateFn(&m.TableData[i][index])
+				m.syncTableRows(i)
 			}
 			return
 		}
 	}
+}
+
+func (m *Model) syncTableRows(tabIndex int) {
+	var rows []table.Row
+	for _, it := range m.TableData[tabIndex] {
+		rows = append(rows, it.ToRow())
+	}
+	m.Tables[tabIndex].SetRows(rows)
 }

@@ -36,7 +36,7 @@ func (m Model) View() string {
 		configHeader := lipgloss.NewStyle().
 			Foreground(sand).
 			PaddingLeft(2).
-			Render(fmt.Sprintf("Target: OS=%v Arch=%v", m.Config.General.OS, m.Config.General.Arch))
+			Render(fmt.Sprintf("Targets: OS=%v Arch=%v", m.Config.General.OS, m.Config.General.Arch))
 
 		var tabs []string
 		for i, t := range m.Tabs {
@@ -49,7 +49,7 @@ func (m Model) View() string {
 
 		tabRow := tabRowStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, tabs...))
 
-		listView := m.Lists[m.ActiveTab].View()
+		tableView := m.Tables[m.ActiveTab].View()
 
 		footer := lipgloss.NewStyle().
 			Foreground(sand).
@@ -60,7 +60,7 @@ func (m Model) View() string {
 		content := lipgloss.JoinVertical(lipgloss.Left,
 			configHeader,
 			tabRow,
-			listView,
+			tableView,
 			footer,
 		)
 
