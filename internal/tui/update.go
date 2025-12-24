@@ -29,7 +29,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for i, item := range items {
 				it := item.(Item)
 				target := m.Config.GetTargetPath(it.Category, it.Source)
-				cmds = append(cmds, checkSourceCmd(i, it.Category, it.Source, target))
+				cmds = append(cmds, checkSourceCmd(i, it.Category, it.Source, target, m.Config.General.GitHubToken))
 			}
 			return m, tea.Batch(cmds...)
 		case "d":
@@ -41,7 +41,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			it.LocalStatus = "Starting download..."
 			m.Lists[m.ActiveTab].SetItem(idx, it)
 
-			return m, DownloadCmd(idx, it.Category, it.Source.URL, target)
+			return m, DownloadCmd(idx, it.Category, it.Source, target, m.Config.General.GitHubToken)
 		case "D":
 			// Download all missing files in current tab
 			var cmds []tea.Cmd
@@ -52,7 +52,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					target := m.Config.GetTargetPath(it.Category, it.Source)
 					it.LocalStatus = "Queued for download..."
 					m.Lists[m.ActiveTab].SetItem(i, it)
-					cmds = append(cmds, DownloadCmd(i, it.Category, it.Source.URL, target))
+					cmds = append(cmds, DownloadCmd(i, it.Category, it.Source, target, m.Config.General.GitHubToken))
 				}
 			}
 			return m, tea.Batch(cmds...)
@@ -70,6 +70,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			it.LocalStatus = msg.Result.Status
 			it.CurrentVersion = msg.Result.Current
 			it.LatestVersion = msg.Result.Latest
+			it.LocalMessage = msg.Result.Message
+			if msg.Result.ResolvedURL != "" {
+				it.Source.URL = msg.Result.ResolvedURL
+			}
 		})
 		return m, nil
 
@@ -81,8 +85,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			it.Downloaded = msg.Progress.Downloaded
 			it.Total = msg.Progress.Total
 
-			// Special handling for space check statuses
-			if it.Total == -1 {
+			// Special handling for space check and resolution statuses
+			if it.Total == -2 {
+				if msg.Progress.Downloaded == 0 {
+					it.LocalStatus = "Resolving URL..."
+				} else {
+					// Feedback from auto-resolution
+					it.LocalStatus = core.VersionStatus(msg.Progress.Status)
+					it.CurrentVersion = msg.Progress.Current
+					it.LatestVersion = msg.Progress.Latest
+					if msg.Progress.ResolvedURL != "" {
+						it.Source.URL = msg.Progress.ResolvedURL
+					}
+				}
+			} else if it.Total == -1 {
 				if it.Downloaded == 0 {
 					it.LocalStatus = "Checking available space..."
 				} else if it.Downloaded == 1 {

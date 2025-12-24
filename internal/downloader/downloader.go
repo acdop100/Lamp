@@ -32,6 +32,13 @@ func CheckAvailableSpace(path string, requiredBytes int64) (bool, int64, error) 
 type Progress struct {
 	Total      int64
 	Downloaded int64
+	Error      error
+
+	// Results from auto-resolution
+	Status      string
+	Current     string
+	Latest      string
+	ResolvedURL string
 }
 
 type ProgressWriter struct {
@@ -48,31 +55,49 @@ func (pw *ProgressWriter) Write(p []byte) (int, error) {
 }
 
 func DownloadFile(url, dest string, progressChan chan<- Progress) error {
-	defer close(progressChan)
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
+		err = fmt.Errorf("failed to create directory: %w", err)
+		progressChan <- Progress{Error: err}
+		close(progressChan)
+		return err
+	}
+
+	if url == "" {
+		err := fmt.Errorf("empty download URL")
+		progressChan <- Progress{Error: err}
+		close(progressChan)
+		return err
 	}
 
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
+		progressChan <- Progress{Error: err}
+		close(progressChan)
 		return err
 	}
 	req.Header.Set("User-Agent", "tui-dl/1.0 (Bubble Tea Download Manager)")
 
 	resp, err := client.Do(req)
 	if err != nil {
+		progressChan <- Progress{Error: err}
+		close(progressChan)
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+		err = fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+		progressChan <- Progress{Error: err}
+		close(progressChan)
+		return err
 	}
 
 	out, err := os.Create(dest)
 	if err != nil {
+		progressChan <- Progress{Error: err}
+		close(progressChan)
 		return err
 	}
 	defer out.Close()
@@ -89,5 +114,9 @@ func DownloadFile(url, dest string, progressChan chan<- Progress) error {
 	}
 
 	_, err = io.Copy(out, io.TeeReader(resp.Body, pw))
+	if err != nil {
+		progressChan <- Progress{Error: err}
+	}
+	close(progressChan)
 	return err
 }

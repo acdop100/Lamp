@@ -1,0 +1,36 @@
+storage:
+  default_root: "./Downloads"
+
+general:
+  os:
+    - "linux"
+    - "macos"
+  arch:
+    - "amd64"
+    - "arm64"
+  # github_token: "YOUR_GITHUB_TOKEN" # Optional: Store in .env as GITHUB_TOKEN instead
+
+categories:
+  ISO Images:
+    path: "./Downloads/ISOs"
+    sources:
+      - id: "ubuntu-mate"
+      - id: "fedora-coreos"
+  ZIMs:
+    path: "./Downloads/Kiwix"
+    sources:
+      - id: "kiwix-wikipedia"
+  Applications:
+    path: "./Downloads/Apps"
+    sources:
+      - id: "balena-etcher"
+  Games:
+    path: "./Downloads/Games"
+    sources:
+      - id: "melonds"
+      - id: "mgba"
+  Media:
+    path: "./Downloads/Media"
+    sources:
+      - id: "vlc"
+      - id: "jellyfin-player"

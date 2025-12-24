@@ -19,7 +19,19 @@ categories:
     path: "./Downloads/Kiwix"
     sources:
       - id: "kiwix-wikipedia"
+      - id: "kiwix-phet"
+      - id: "kiwix-openstreetmap"
   Applications:
     path: "./Downloads/Apps"
     sources:
       - id: "balena-etcher"
+  Games:
+    path: "./Downloads/Games"
+    sources:
+      - id: "melonds"
+      - id: "mgba"
+  Media:
+    path: "./Downloads/Media"
+    sources:
+      - id: "vlc"
+      - id: "jellyfin-player"

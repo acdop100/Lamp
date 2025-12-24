@@ -28,7 +28,7 @@ func TestCheckKiwixVersion(t *testing.T) {
 		},
 	}
 
-	result := CheckVersion(src, localPath)
+	result := CheckVersion(src, localPath, "")
 
 	if result.Status != StatusNewer {
 		t.Errorf("Expected status %v, got %v (Message: %s)", StatusNewer, result.Status, result.Message)
@@ -56,7 +56,7 @@ func TestCheckUbuntuVersion(t *testing.T) {
 		},
 	}
 
-	result := CheckVersion(src, localPath)
+	result := CheckVersion(src, localPath, "")
 
 	// Since 25.10 is out, this should be Newer
 	// Note: allow for UpToDate if 24.04 happens to be the latest matched for some reason,
@@ -87,7 +87,7 @@ func TestCheckFedoraCoreOSVersion(t *testing.T) {
 		},
 	}
 
-	result := CheckVersion(src, localPath)
+	result := CheckVersion(src, localPath, "")
 
 	if result.Status != StatusNewer {
 		t.Errorf("Expected status %v, got %v (Message: %s)", StatusNewer, result.Status, result.Message)
@@ -109,7 +109,7 @@ func TestCheckUpToDate(t *testing.T) {
 	}
 
 	// We pass a dummy localPath just to define the directory
-	initialResult := CheckVersion(src, filepath.Join(tmpDir, "dummy"))
+	initialResult := CheckVersion(src, filepath.Join(tmpDir, "dummy"), "")
 	if initialResult.Status != StatusNotFound && initialResult.Status != StatusNewer {
 		t.Fatalf("Unexpected initial status: %v", initialResult.Status)
 	}
@@ -126,7 +126,7 @@ func TestCheckUpToDate(t *testing.T) {
 	}
 
 	// Run check again
-	finalResult := CheckVersion(src, filepath.Join(tmpDir, "dummy"))
+	finalResult := CheckVersion(src, filepath.Join(tmpDir, "dummy"), "")
 
 	if finalResult.Status != StatusUpToDate {
 		t.Errorf("Expected status %v, got %v (Message: %s)", StatusUpToDate, finalResult.Status, finalResult.Message)

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"tui-dl/internal/config"
 	"tui-dl/internal/core"
 	"tui-dl/internal/downloader"
@@ -31,6 +33,7 @@ type Item struct {
 	LocalStatus    core.VersionStatus
 	CurrentVersion string
 	LatestVersion  string
+	LocalMessage   string // Store error or info messages from checking
 	Downloaded     int64
 	Total          int64
 }
@@ -46,14 +49,24 @@ func (i Item) Title() string {
 }
 func (i Item) Description() string {
 	status := string(i.LocalStatus)
+
+	// Helper to normalize version strings (strip leading 'v's)
+	normalizeVer := func(v string) string {
+		return strings.TrimLeft(v, "v")
+	}
+
+	if i.LocalStatus == core.StatusError {
+		return fmt.Sprintf("Error: %s", i.LocalMessage)
+	}
+
 	if i.LocalStatus == core.StatusUpToDate && i.CurrentVersion != "" {
-		return fmt.Sprintf("Up to Date [v%s]", i.CurrentVersion)
+		return fmt.Sprintf("Up to Date [v%s]", normalizeVer(i.CurrentVersion))
 	}
 	if i.LocalStatus == core.StatusNewer && i.CurrentVersion != "" && i.LatestVersion != "" {
-		return fmt.Sprintf("Newer Version Available [v%s -> v%s]", i.CurrentVersion, i.LatestVersion)
+		return fmt.Sprintf("Newer Version Available [v%s -> v%s]", normalizeVer(i.CurrentVersion), normalizeVer(i.LatestVersion))
 	}
 	if i.LatestVersion != "" && i.LocalStatus != core.StatusUpToDate && i.LocalStatus != core.StatusNewer {
-		return fmt.Sprintf("%s [Latest: v%s]", status, i.LatestVersion)
+		return fmt.Sprintf("%s [Latest: v%s]", status, normalizeVer(i.LatestVersion))
 	}
 	return status
 }
@@ -131,9 +144,9 @@ type CheckMsg struct {
 	Result   core.CheckResult
 }
 
-func checkSourceCmd(index int, category string, src config.Source, localPath string) tea.Cmd {
+func checkSourceCmd(index int, category string, src config.Source, localPath string, githubToken string) tea.Cmd {
 	return func() tea.Msg {
-		result := core.CheckVersion(src, localPath)
+		result := core.CheckVersion(src, localPath, githubToken)
 		return CheckMsg{Category: category, Index: index, Result: result}
 	}
 }
@@ -164,11 +177,37 @@ func DownloadCmdBatch(index int, category, url, dest string, progressChan chan d
 	}
 }
 
-func DownloadCmd(index int, category, url, dest string) tea.Cmd {
+func DownloadCmd(index int, category string, src config.Source, dest string, githubToken string) tea.Cmd {
 	return func() tea.Msg {
 		progressChan := make(chan downloader.Progress, 10)
 
 		go func() {
+			url := src.URL
+			if url == "" {
+				// 0. Auto-resolve
+				progressChan <- downloader.Progress{Downloaded: 0, Total: -2} // Special indicator for "Resolving..."
+				res := core.CheckVersion(src, dest, githubToken)
+				if res.ResolvedURL == "" {
+					progressChan <- downloader.Progress{Error: fmt.Errorf("could not resolve download URL: %s", res.Message)}
+					close(progressChan)
+					return
+				}
+				url = res.ResolvedURL
+				// Recalculate dest if it was missing an extension (because URL was empty)
+				if filepath.Base(dest) == src.Name || strings.Contains(filepath.Base(dest), "[") {
+					dest = filepath.Join(filepath.Dir(dest), filepath.Base(url))
+				}
+				// Feedback the resolved info to TUI
+				progressChan <- downloader.Progress{
+					Downloaded:  1,
+					Total:       -2,
+					Status:      string(res.Status),
+					Current:     res.Current,
+					Latest:      res.Latest,
+					ResolvedURL: res.ResolvedURL,
+				}
+			}
+
 			// 1. Log space check
 			progressChan <- downloader.Progress{Downloaded: 0, Total: -1} // Custom indicator for "Checking space"
 
@@ -209,7 +248,10 @@ func WaitForProgress(index int, category string, progressChan chan downloader.Pr
 	return func() tea.Msg {
 		p, ok := <-progressChan
 		if !ok {
-			return nil // DownloadCmdBatch will send the final DownloadMsg
+			return DownloadMsg{Category: category, Index: index, Err: nil}
+		}
+		if p.Error != nil {
+			return DownloadMsg{Category: category, Index: index, Err: p.Error}
 		}
 		return ProgressUpdateMsg{Category: category, Index: index, Progress: p, ProgressChan: progressChan}
 	}

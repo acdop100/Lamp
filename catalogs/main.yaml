@@ -1,0 +1,109 @@
+# catalog.yaml - Download Source Definitions
+#
+# Parameterized Variables:
+# Sources can use {{os}} and {{arch}} placeholders in their params.
+#
+# Available Variables:
+#   {{os}}            - "linux", "macos", "windows"
+#   {{os_short}}      - "mac" for macos, matching the OS otherwise
+#   {{os_proper}}     - "Linux", "macOS"
+#   {{os_melon}}      - "appimage" (linux), "macOS" (macos)
+#   {{os_mgba}}       - "appimage" (linux), "macos" (macos)
+#   {{arch}}          - "amd64", "arm64"
+#   {{arch_fedora}}   - Maps amd64 -> x86_64, arm64 -> aarch64
+#   {{arch_electron}} - Maps amd64 -> x64, arm64 -> arm64
+#   {{arch_vlc}}      - Maps amd64 -> intel64
+#   {{arch_melon}}    - Maps macos -> universal, linux -> x86_64/aarch64
+#   {{arch_mgba}}     - Maps macos -> (empty), linux -> -x64/-arm64
+#   {{ext}}           - Generic extension: "zip" for linux, "dmg" for macos
+#
+sources:
+  - id: "ubuntu-mate"
+    name: "Ubuntu Mate"
+    strategy: "web_scrape"
+    params:
+      base_url: "https://cdimage.ubuntu.com/ubuntu-mate/releases/"
+      # Find directories like "25.10/"
+      version_pattern: '(\d+\.\d+)/'
+      # Construct the ISO URL: base + version + template
+      file_template: "{{version}}/release/ubuntu-mate-{{version}}-desktop-{{arch}}.iso"
+    exclude: ["arm64"] # Only amd64 ISOs available
+
+  - id: "fedora-coreos"
+    name: "Fedora CoreOS"
+    strategy: "fedora_coreos"
+    params:
+      stream: "stable"
+      arch: "{{arch_fedora}}" # map amd64->x86_64
+      artifact_type: "metal"
+
+  - id: "kiwix-wikipedia"
+    name: "Wikipedia English (100 articles)"
+    strategy: "kiwix_feed"
+    params:
+      series: "wikipedia_en_100_mini"
+      feed_url: "https://library.kiwix.org/catalog/v2/entries"
+
+  - id: "kiwix-phet"
+    name: "PhET Interactive Simulations"
+    strategy: "kiwix_feed"
+    params:
+      series: "phet_en_all"
+      feed_url: "https://library.kiwix.org/catalog/v2/entries"
+
+  - id: "kiwix-openstreetmap"
+    name: "OpenStreetMap"
+    strategy: "kiwix_feed"
+    params:
+      series: "openstreetmap-wiki_en_all_maxi"
+      feed_url: "https://library.kiwix.org/catalog/v2/entries"
+
+  - id: "balena-etcher"
+    name: "BalenaEtcher"
+    strategy: "github_release"
+    params:
+      repo: "balena-io/etcher"
+      # New v2.x format: balenaEtcher-2.1.4-arm64.dmg (macOS)
+      # Linux: balenaEtcher-linux-x64-2.1.4.zip
+      asset_pattern: "balenaEtcher-.*{{os_balena}}{{arch_balena}}.*\\.{{ext_balena}}"
+    exclude: ["linux/arm64"]
+
+  # --- Games ---
+  - id: "melonds"
+    name: "melonDS"
+    strategy: "github_release"
+    params:
+      repo: "melonDS-emu/melonDS"
+      # melonDS-1.1-appimage-x86_64.zip
+      # melonDS-1.1-macOS-universal.zip
+      asset_pattern: "melonDS-.*-{{os_melon}}-{{arch_melon}}.*"
+
+  - id: "mgba"
+    name: "mGBA"
+    strategy: "github_release"
+    params:
+      repo: "mgba-emu/mgba"
+      # mGBA-0.10.3-macos.dmg
+      # mGBA-0.10.3-appimage-x64.appimage
+      asset_pattern: "mGBA-.*-{{os_mgba}}{{arch_mgba}}.*"
+
+  # --- Media ---
+  - id: "vlc"
+    name: "VLC Media Player"
+    strategy: "web_scrape"
+    params:
+      base_url: "https://get.videolan.org/vlc/"
+      version_pattern: '(\d+\.\d+\.\d+)/'
+      # Construct: 3.0.21/macosx/vlc-3.0.21-intel64.dmg
+      file_template: "{{version}}/macosx/vlc-{{version}}-{{arch_vlc}}.dmg"
+    exclude: ["linux"] # Linux VLC is usually via package manager, scraping source is messy
+
+  - id: "jellyfin-player"
+    name: "Jellyfin Media Player"
+    strategy: "github_release"
+    params:
+      repo: "jellyfin/jellyfin-media-player"
+      # JellyfinMediaPlayer-1.12.0-AppleSilicon.dmg
+      # JellyfinMediaPlayer-1.12.0-Intel.dmg
+      asset_pattern: "JellyfinMediaPlayer-.*-{{arch_jellyfin}}\\.dmg"
+    exclude: ["linux"] # Only .deb packages available for Linux

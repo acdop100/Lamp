@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -12,9 +13,25 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"tui-dl/internal/config"
+
+	"github.com/google/go-github/v69/github"
 )
+
+var (
+	githubCache sync.Map // map[string]*github.RepositoryRelease
+	webCache    sync.Map // map[string]string (URL:Body)
+)
+
+func parseRepo(repo string) (string, string, error) {
+	parts := strings.Split(repo, "/")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid repo format: %s", repo)
+	}
+	return parts[0], parts[1], nil
+}
 
 type VersionStatus string
 
@@ -65,7 +82,7 @@ type Entry struct {
 	Issued  string `xml:"issued"` // Format: 2025-10-16T00:00:00Z
 }
 
-func CheckVersion(src config.Source, localPath string) CheckResult {
+func CheckVersion(src config.Source, localPath string, githubToken string) CheckResult {
 	info, err := os.Stat(localPath)
 	if os.IsNotExist(err) && src.Strategy == "" {
 		// Only return NotFound if we have no strategy to verify against (legacy/direct file)
@@ -83,7 +100,7 @@ func CheckVersion(src config.Source, localPath string) CheckResult {
 	case "kiwix_feed":
 		return resolveKiwixFeed(src, localPath)
 	case "github_release":
-		return resolveGithubRelease(src, localPath)
+		return resolveGithubRelease(src, localPath, githubToken)
 	default:
 		// Fallback for direct URLs (legacy behavior)
 		if src.URL != "" {
@@ -93,7 +110,7 @@ func CheckVersion(src config.Source, localPath string) CheckResult {
 	}
 }
 
-func resolveGithubRelease(src config.Source, localPath string) CheckResult {
+func resolveGithubRelease(src config.Source, localPath string, githubToken string) CheckResult {
 	repo := src.Params["repo"]
 	assetPattern := src.Params["asset_pattern"]
 
@@ -101,29 +118,31 @@ func resolveGithubRelease(src config.Source, localPath string) CheckResult {
 		return CheckResult{Status: StatusError, Message: "Missing repo or asset_pattern params"}
 	}
 
-	// GitHub API: Get latest release
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
-	resp, err := http.Get(apiURL)
+	owner, repoName, err := parseRepo(repo)
 	if err != nil {
-		return CheckResult{Status: StatusError, Message: "GitHub API error: " + err.Error()}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return CheckResult{Status: StatusError, Message: fmt.Sprintf("GitHub API returned %d", resp.StatusCode)}
+		return CheckResult{Status: StatusError, Message: err.Error()}
 	}
 
-	var release struct {
-		TagName string `json:"tag_name"`
-		Assets  []struct {
-			Name               string `json:"name"`
-			BrowserDownloadURL string `json:"browser_download_url"`
-		} `json:"assets"`
+	var release *github.RepositoryRelease
+	if val, ok := githubCache.Load(repo); ok {
+		release = val.(*github.RepositoryRelease)
+	} else {
+		client := github.NewClient(nil)
+		if githubToken != "" {
+			client = client.WithAuthToken(githubToken)
+		} else if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+			client = client.WithAuthToken(token)
+		}
+
+		var err error
+		release, _, err = client.Repositories.GetLatestRelease(context.Background(), owner, repoName)
+		if err != nil {
+			return CheckResult{Status: StatusError, Message: "GitHub API error: " + err.Error()}
+		}
+		githubCache.Store(repo, release)
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return CheckResult{Status: StatusError, Message: "Failed to parse GitHub response"}
-	}
+	tagName := release.GetTagName()
 
 	// Find the matching asset
 	re, err := regexp.Compile(assetPattern)
@@ -133,9 +152,17 @@ func resolveGithubRelease(src config.Source, localPath string) CheckResult {
 
 	var downloadURL string
 	for _, asset := range release.Assets {
-		if re.MatchString(asset.Name) {
-			downloadURL = asset.BrowserDownloadURL
+		if re.MatchString(asset.GetName()) {
+			downloadURL = asset.GetBrowserDownloadURL()
 			break
+		}
+	}
+
+	if downloadURL == "" {
+		return CheckResult{
+			Status:  StatusError,
+			Message: fmt.Sprintf("No asset found matching pattern '%s' in release %s", assetPattern, tagName),
+			Latest:  tagName,
 		}
 	}
 
@@ -147,31 +174,28 @@ func resolveGithubRelease(src config.Source, localPath string) CheckResult {
 	entries, _ := os.ReadDir(targetDir)
 	for _, entry := range entries {
 		if !entry.IsDir() && re.MatchString(entry.Name()) {
-			matches := re.FindStringSubmatch(entry.Name())
-			if len(matches) > 0 {
-				currentVersion = release.TagName // For GitHub we often just use the tag
-			}
+			currentVersion = tagName // Best guess
 			break
 		}
 	}
 
 	if _, err := os.Stat(fullLocalPath); err == nil {
-		return CheckResult{Status: StatusUpToDate, Current: release.TagName, Latest: release.TagName, ResolvedURL: downloadURL}
+		return CheckResult{Status: StatusUpToDate, Current: tagName, Latest: tagName, ResolvedURL: downloadURL}
 	}
 
 	if currentVersion != "" {
 		return CheckResult{
 			Status:      StatusNewer,
 			Current:     currentVersion,
-			Latest:      release.TagName,
-			Message:     fmt.Sprintf("New release: %s", release.TagName),
+			Latest:      tagName,
+			Message:     fmt.Sprintf("New release: %s", tagName),
 			ResolvedURL: downloadURL,
 		}
 	}
 
 	return CheckResult{
 		Status:      StatusNotFound,
-		Latest:      release.TagName,
+		Latest:      tagName,
 		ResolvedURL: downloadURL,
 	}
 }
@@ -186,13 +210,19 @@ func resolveWebScrape(src config.Source, localPath string) CheckResult {
 	}
 
 	// Scrape the directory
-	resp, err := http.Get(baseURL)
-	if err != nil {
-		return CheckResult{Status: StatusError, Message: "Failed to scrape: " + err.Error()}
-	}
-	defer resp.Body.Close()
+	var body []byte
+	if val, ok := webCache.Load(baseURL); ok {
+		body = val.([]byte)
+	} else {
+		resp, err := http.Get(baseURL)
+		if err != nil {
+			return CheckResult{Status: StatusError, Message: "Failed to scrape: " + err.Error()}
+		}
+		defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+		body, _ = io.ReadAll(resp.Body)
+		webCache.Store(baseURL, body)
+	}
 	reDir := regexp.MustCompile(versionPattern)
 
 	matches := reDir.FindAllStringSubmatch(string(body), -1)

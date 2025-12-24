@@ -18,8 +18,9 @@ type Config struct {
 }
 
 type GeneralConfig struct {
-	OS   []string `yaml:"os"`
-	Arch []string `yaml:"arch"`
+	OS          []string `yaml:"os"`
+	Arch        []string `yaml:"arch"`
+	GitHubToken string   `yaml:"github_token"`
 }
 
 type Storage struct {
@@ -67,38 +68,67 @@ func LoadConfig(configPath string) (*Config, error) {
 		cfg.General.Arch = []string{runtime.GOARCH}
 	}
 
-	// 2. Load Catalog
-	catalogPath := filepath.Join(filepath.Dir(configPath), "catalog.yaml")
-	catalogData, err := os.ReadFile(catalogPath)
-	if err == nil {
-		var catalog Catalog
-		if err := yaml.Unmarshal(catalogData, &catalog); err == nil {
-			catalogMap := make(map[string]Source)
-			for _, s := range catalog.Sources {
-				catalogMap[s.ID] = s
-			}
+	// 1.5. Priority: Config > .env > Environment
+	loadEnv()
+	if cfg.General.GitHubToken == "" {
+		cfg.General.GitHubToken = os.Getenv("GITHUB_TOKEN")
+	}
 
-			// 3. Merge Catalog
-			for catName, cat := range cfg.Categories {
-				for i, src := range cat.Sources {
-					if src.ID != "" {
-						if original, ok := catalogMap[src.ID]; ok {
-							merged := original
-							if src.Name != "" {
-								merged.Name = src.Name
-							}
-							if src.OS != "" {
-								merged.OS = src.OS
-							}
-							if len(src.Exclude) > 0 {
-								merged.Exclude = append(merged.Exclude, src.Exclude...)
-							}
-							cat.Sources[i] = merged
-						}
+	// 2. Load Catalogs
+	catalogMap := make(map[string]Source)
+	catalogsDir := filepath.Join(filepath.Dir(configPath), "catalogs")
+	entries, err := os.ReadDir(catalogsDir)
+	if err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && (strings.HasSuffix(entry.Name(), ".yaml") || strings.HasSuffix(entry.Name(), ".yml")) {
+				catalogPath := filepath.Join(catalogsDir, entry.Name())
+				data, err := os.ReadFile(catalogPath)
+				if err != nil {
+					continue
+				}
+				var catalog Catalog
+				if err := yaml.Unmarshal(data, &catalog); err == nil {
+					for _, s := range catalog.Sources {
+						catalogMap[s.ID] = s
 					}
 				}
-				cfg.Categories[catName] = cat
 			}
+		}
+	} else {
+		// Fallback to legacy catalog.yaml for backward compatibility
+		catalogPath := filepath.Join(filepath.Dir(configPath), "catalog.yaml")
+		data, err := os.ReadFile(catalogPath)
+		if err == nil {
+			var catalog Catalog
+			if err := yaml.Unmarshal(data, &catalog); err == nil {
+				for _, s := range catalog.Sources {
+					catalogMap[s.ID] = s
+				}
+			}
+		}
+	}
+
+	if len(catalogMap) > 0 {
+		// 3. Merge Catalog
+		for catName, cat := range cfg.Categories {
+			for i, src := range cat.Sources {
+				if src.ID != "" {
+					if original, ok := catalogMap[src.ID]; ok {
+						merged := original
+						if src.Name != "" {
+							merged.Name = src.Name
+						}
+						if src.OS != "" {
+							merged.OS = src.OS
+						}
+						if len(src.Exclude) > 0 {
+							merged.Exclude = append(merged.Exclude, src.Exclude...)
+						}
+						cat.Sources[i] = merged
+					}
+				}
+			}
+			cfg.Categories[catName] = cat
 		}
 	}
 
@@ -119,11 +149,10 @@ func expandSources(cfg *Config) {
 	for catName, cat := range cfg.Categories {
 		var expandedSources []Source
 		for _, src := range cat.Sources {
-			// Analyze used variables
-			usesOS := false
-			usesArch := false
+			usesOS := len(src.Exclude) > 0
+			usesArch := len(src.Exclude) > 0
 			for _, v := range src.Params {
-				if strings.Contains(v, "{{os") {
+				if strings.Contains(v, "{{os") || strings.Contains(v, "{{ext") {
 					usesOS = true
 				}
 				if strings.Contains(v, "{{arch") {
@@ -151,6 +180,13 @@ func expandSources(cfg *Config) {
 			}
 
 			// Cartesian Product of necessary dimensions
+			type expandedKey struct {
+				os     string
+				params string
+			}
+			seen := make(map[expandedKey]*Source)
+			var keys []expandedKey
+
 			for _, osName := range osList {
 				for _, archName := range archList {
 					// Check exclusion
@@ -166,12 +202,29 @@ func expandSources(cfg *Config) {
 
 					substituteParams(&newSrc, osName, archName)
 
+					// De-duplicate based on OS + Params
+					paramStr := fmt.Sprintf("%v", newSrc.Params)
+					key := expandedKey{os: osName, params: paramStr}
+
+					if existing, ok := seen[key]; ok {
+						// If identical, append arch to name if not already there
+						if usesArch && archName != "" {
+							if !strings.Contains(existing.Name, archName) {
+								// Try to find the closing bracket
+								if strings.HasSuffix(existing.Name, "]") {
+									existing.Name = existing.Name[:len(existing.Name)-1] + "+" + archName + "]"
+								}
+							}
+						}
+						continue
+					}
+
 					// Build Name Suffix
 					var suffixParts []string
-					if usesOS {
+					if usesOS && osName != "" {
 						suffixParts = append(suffixParts, osName)
 					}
-					if usesArch {
+					if usesArch && archName != "" {
 						suffixParts = append(suffixParts, archName)
 					}
 
@@ -179,31 +232,25 @@ func expandSources(cfg *Config) {
 						newSrc.Name = fmt.Sprintf("%s [%s]", src.Name, strings.Join(suffixParts, "/"))
 					}
 
-					// Store metadata if used (or just store what we iterated)
 					if usesOS {
 						newSrc.OS = osName
 					}
-					// Only set Arch if we actually expanded on it, or if it's relevant
 					if usesArch {
 						newSrc.Arch = archName
 					}
 
-					expandedSources = append(expandedSources, newSrc)
+					seen[key] = &newSrc
+					keys = append(keys, key)
 				}
+			}
+
+			for _, k := range keys {
+				expandedSources = append(expandedSources, *seen[k])
 			}
 		}
 		cat.Sources = expandedSources
 		cfg.Categories[catName] = cat
 	}
-}
-
-func hasTemplateVariables(src Source) bool {
-	for _, v := range src.Params {
-		if strings.Contains(v, "{{") {
-			return true
-		}
-	}
-	return false
 }
 
 func substituteParams(src *Source, osName, archName string) {
@@ -235,13 +282,79 @@ func substituteParams(src *Source, osName, archName string) {
 		archElectron = "x64"
 	}
 
+	// VLC: amd64->intel64 (or blank), arm64->arm64
+	archVLC := archName
+	if archName == "amd64" {
+		archVLC = "intel64"
+	}
+
+	// melonDS: x86_64, aarch64 (linux), universal (macos)
+	archMelon := archFedora
+	osMelon := "appimage"
+	if osName == "macos" {
+		archMelon = "universal"
+		osMelon = "macOS"
+	}
+
+	// mGBA: x64, arm64 (linux), macos/osx (macos)
+	archMGBA := "-" + archElectron
+	osMGBA := "appimage"
+	if osName == "macos" {
+		archMGBA = ""
+		if archName == "amd64" {
+			osMGBA = "osx" // Older Intel builds use osx marker
+		} else {
+			osMGBA = "macos" // Modern ARM/Universal use macos marker
+		}
+	}
+
+	// Jellyfin: Intel, AppleSilicon
+	archJellyfin := archName
+	if osName == "macos" {
+		if archName == "amd64" {
+			archJellyfin = "Intel"
+		} else if archName == "arm64" {
+			archJellyfin = "AppleSilicon"
+		}
+	}
+
+	// BalenaEtcher: New v2.x naming
+	// macOS: balenaEtcher-2.1.4-arm64.dmg, balenaEtcher-2.1.4-x64.dmg
+	// Linux: balenaEtcher-linux-x64-2.1.4.zip
+	osBalena := ""
+	archBalena := archElectron
+	if osName == "linux" {
+		osBalena = "linux-"
+	} else if osName == "macos" {
+		// For Balena, macOS assets distinguish by arm64 vs x64 directly in the name
+		// We'll use archElectron which is already x64/arm64
+		archBalena = archElectron
+	}
+	extBalena := ext
+
+	// OS naming variations
+	osProper := "Linux"
+	if osName == "macos" {
+		osProper = "macOS"
+	}
+
 	for k, v := range src.Params {
 		v = strings.ReplaceAll(v, "{{os}}", osName)
 		v = strings.ReplaceAll(v, "{{os_short}}", osShort)
+		v = strings.ReplaceAll(v, "{{os_proper}}", osProper)
+		v = strings.ReplaceAll(v, "{{os_melon}}", osMelon)
+		v = strings.ReplaceAll(v, "{{os_mgba}}", osMGBA)
+		v = strings.ReplaceAll(v, "{{os_balena}}", osBalena)
 		v = strings.ReplaceAll(v, "{{arch}}", archName)
 		v = strings.ReplaceAll(v, "{{arch_fedora}}", archFedora)
 		v = strings.ReplaceAll(v, "{{arch_electron}}", archElectron)
+		v = strings.ReplaceAll(v, "{{arch_vlc}}", archVLC)
+		v = strings.ReplaceAll(v, "{{arch_melon}}", archMelon)
+		v = strings.ReplaceAll(v, "{{arch_mgba}}", archMGBA)
+		v = strings.ReplaceAll(v, "{{arch_balena}}", archBalena)
+		v = strings.ReplaceAll(v, "{{arch_jellyfin}}", archJellyfin)
 		v = strings.ReplaceAll(v, "{{ext}}", ext)
+		v = strings.ReplaceAll(v, "{{ext_balena}}", extBalena)
 		src.Params[k] = v
 	}
 }
@@ -293,4 +406,29 @@ func (c *Config) GetTargetPath(categoryName string, src Source) string {
 	}
 
 	return filepath.Join(basePath, filename)
+}
+
+func loadEnv() {
+	data, err := os.ReadFile(".env")
+	if err != nil {
+		return
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			val := strings.TrimSpace(parts[1])
+			// Only set if not already set in environment
+			if os.Getenv(key) == "" {
+				os.Setenv(key, val)
+			}
+		}
+	}
 }

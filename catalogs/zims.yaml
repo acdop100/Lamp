@@ -1,0 +1,33 @@
+# catalog.yaml - Download Source Definitions
+#
+# Parameterized Variables:
+# Sources can use {{os}} and {{arch}} placeholders in their params.
+#
+# Available Variables:
+#   {{os}}            - "linux", "macos", "windows"
+#   {{os_short}}      - "mac" for macos, matching the OS otherwise
+#   {{os_proper}}     - "Linux", "macOS"
+#   {{os_melon}}      - "appimage" (linux), "macOS" (macos)
+#   {{os_mgba}}       - "appimage" (linux), "macos" (macos)
+#   {{arch}}          - "amd64", "arm64"
+#   {{arch_fedora}}   - Maps amd64 -> x86_64, arm64 -> aarch64
+#   {{arch_electron}} - Maps amd64 -> x64, arm64 -> arm64
+#   {{arch_vlc}}      - Maps amd64 -> intel64
+#   {{arch_melon}}    - Maps macos -> universal, linux -> x86_64/aarch64
+#   {{arch_mgba}}     - Maps macos -> (empty), linux -> -x64/-arm64
+#   {{ext}}           - Generic extension: "zip" for linux, "dmg" for macos
+#
+sources:
+  - id: "kiwix-phet"
+    name: "PhET Interactive Simulations"
+    strategy: "kiwix_feed"
+    params:
+      series: "phet_en_all"
+      feed_url: "https://library.kiwix.org/catalog/v2/entries"
+
+  - id: "kiwix-openstreetmap"
+    name: "OpenStreetMap"
+    strategy: "kiwix_feed"
+    params:
+      series: "openstreetmap-wiki_en_all_maxi"
+      feed_url: "https://library.kiwix.org/catalog/v2/entries"
