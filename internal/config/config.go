@@ -40,6 +40,7 @@ type Source struct {
 	OS       string            `yaml:"os,omitempty"`
 	Arch     string            `yaml:"arch,omitempty"` // Added to track specific arch of expanded source
 	Exclude  []string          `yaml:"exclude,omitempty"`
+	Checksum string            `yaml:"checksum,omitempty"` // Checksum for integrity verification (e.g. sha256:...)
 	// Deprecated: URL is now resolved dynamically, but kept for direct overrides
 	URL string `yaml:"url,omitempty"`
 }

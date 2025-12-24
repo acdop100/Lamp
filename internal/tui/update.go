@@ -45,21 +45,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.TableData[m.ActiveTab][idx] = it
 			m.syncTableRows(m.ActiveTab)
 
+			m.ActiveDownloads++ // Manual download counts towards concurrency
 			return m, DownloadCmd(idx, it.Category, it.Source, target, m.Config.General.GitHubToken)
 		case "D":
 			// Download all missing files in current tab
-			var cmds []tea.Cmd
+			// Add to queue instead of firing immediately
 			items := m.TableData[m.ActiveTab]
 			for i, it := range items {
 				if it.LocalStatus == "Local File Not Found" || it.LocalStatus == "Not Checked" {
-					target := m.Config.GetTargetPath(it.Category, it.Source)
-					it.LocalStatus = "Queued for download..."
+					it.LocalStatus = "Queued"
 					m.TableData[m.ActiveTab][i] = it
-					cmds = append(cmds, DownloadCmd(i, it.Category, it.Source, target, m.Config.General.GitHubToken))
+					m.DownloadQueue = append(m.DownloadQueue, QueueItem{Category: it.Category, Index: i})
 				}
 			}
 			m.syncTableRows(m.ActiveTab)
-			return m, tea.Batch(cmds...)
+			return m, m.ProcessQueue()
 		case "f":
 			m.State = stateFolderSelect
 			return m, m.Filepicker.Init()
@@ -71,6 +71,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case CheckMsg:
 		m.updateItemState(msg.Category, msg.Index, func(it *Item) {
+			it.Total = 0
+			it.Downloaded = 0
 			it.LocalStatus = msg.Result.Status
 			it.CurrentVersion = msg.Result.Current
 			it.LatestVersion = msg.Result.Latest
@@ -125,12 +127,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, WaitForProgress(msg.Index, msg.Category, msg.ProgressChan)
 
 	case DownloadMsg:
+		m.ActiveDownloads--
+		if m.ActiveDownloads < 0 {
+			m.ActiveDownloads = 0
+		}
+
+		var nextCmd tea.Cmd
 		m.updateItemState(msg.Category, msg.Index, func(it *Item) {
 			if msg.Err != nil {
 				it.LocalStatus = core.VersionStatus("Error: " + msg.Err.Error())
 			} else {
-				it.LocalStatus = "Finished"
-				it.Downloaded = it.Total
+				if it.Source.Checksum != "" {
+					it.LocalStatus = "Verifying integrity..."
+					target := m.Config.GetTargetPath(it.Category, it.Source)
+					nextCmd = VerifyCmd(msg.Index, msg.Category, target, it.Source.Checksum)
+				} else {
+					it.LocalStatus = "Finished"
+					it.Downloaded = 0
+					it.Total = 0
+				}
+			}
+		})
+
+		// Process queue and batch with nextCmd (verify or none)
+		queueCmd := m.ProcessQueue()
+		if nextCmd != nil && queueCmd != nil {
+			return m, tea.Batch(nextCmd, queueCmd)
+		} else if nextCmd != nil {
+			return m, nextCmd
+		}
+		return m, queueCmd
+
+	case VerifyMsg:
+		m.updateItemState(msg.Category, msg.Index, func(it *Item) {
+			if msg.Err != nil {
+				it.LocalStatus = core.VersionStatus("Checksum Failed")
+				it.LocalMessage = msg.Err.Error()
+			} else {
+				it.LocalStatus = "Verified & Finished"
+				it.Downloaded = 0
+				it.Total = 0
 			}
 		})
 		return m, nil

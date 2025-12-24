@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -44,7 +45,17 @@ func (i Item) normalizeVer(v string) string {
 
 func (i Item) ToRow() table.Row {
 	status := string(i.LocalStatus)
-	if i.LocalStatus == core.StatusError {
+
+	// Check if this looks like a download status and we have progress info
+	// The status string from update.go often starts with "Downloading..." or has "Enough space"
+	// But we can rely on Total > 0 and Downloaded to be sure we are tracking progress
+	if i.Total > 0 {
+		percent := float64(i.Downloaded) / float64(i.Total)
+		// Use a fixed width for the bar within the column, e.g. 20 chars
+		// Ideally this would be dynamic based on column width, but ToRow doesn't know context width easily
+		// We'll trust the renderer to truncate or we use a safe default
+		status = progressBar(percent, 20)
+	} else if i.LocalStatus == core.StatusError {
 		status = "Error: " + i.LocalMessage
 	}
 
@@ -59,17 +70,52 @@ func (i Item) ToRow() table.Row {
 	}
 }
 
+type QueueItem struct {
+	Category string
+	Index    int
+}
+
 type Model struct {
-	Config     *config.Config
-	State      state
-	Tabs       []string
-	ActiveTab  int
-	Tables     []table.Model
-	TableData  [][]Item // Raw data for each table
-	Filepicker filepicker.Model
-	Viewport   viewport.Model
-	Width      int
-	Height     int
+	Config          *config.Config
+	State           state
+	Tabs            []string
+	ActiveTab       int
+	Tables          []table.Model
+	TableData       [][]Item // Raw data for each table
+	Filepicker      filepicker.Model
+	Viewport        viewport.Model
+	Width           int
+	Height          int
+	DownloadQueue   []QueueItem
+	ActiveDownloads int
+}
+
+func progressBar(percent float64, width int) string {
+	if width < 2 {
+		return ""
+	}
+	// Clamp percentage
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 1 {
+		percent = 1
+	}
+
+	barWidth := width - 8 // Reserve space for percentage text " 100.0%"
+	if barWidth < 5 {
+		barWidth = 5
+	}
+
+	full := int(math.Round(percent * float64(barWidth)))
+	empty := barWidth - full
+
+	if empty < 0 {
+		empty = 0
+	}
+
+	bar := strings.Repeat("█", full) + strings.Repeat("░", empty)
+	return fmt.Sprintf("%s %5.1f%%", bar, percent*100)
 }
 
 func NewModel(cfg *config.Config) Model {
@@ -283,4 +329,61 @@ func WaitForProgress(index int, category string, progressChan chan downloader.Pr
 		}
 		return ProgressUpdateMsg{Category: category, Index: index, Progress: p, ProgressChan: progressChan}
 	}
+}
+
+type VerifyMsg struct {
+	Category string
+	Index    int
+	Err      error
+}
+
+func VerifyCmd(index int, category, path, checksum string) tea.Cmd {
+	return func() tea.Msg {
+		err := downloader.VerifyFile(path, checksum)
+		return VerifyMsg{Category: category, Index: index, Err: err}
+	}
+}
+
+func (m *Model) ProcessQueue() tea.Cmd {
+	var maxConcurrent = 3
+	var cmds []tea.Cmd
+
+	for len(m.DownloadQueue) > 0 && m.ActiveDownloads < maxConcurrent {
+		// Pop
+		item := m.DownloadQueue[0]
+		m.DownloadQueue = m.DownloadQueue[1:]
+		m.ActiveDownloads++
+
+		// Get latest item data to ensure correct source/path
+		// Find the item in table data
+		var src config.Source
+		found := false
+		for tabIdx, name := range m.Tabs {
+			if name == item.Category {
+				if item.Index >= 0 && item.Index < len(m.TableData[tabIdx]) {
+					src = m.TableData[tabIdx][item.Index].Source
+					found = true
+				}
+				break
+			}
+		}
+
+		if found {
+			target := m.Config.GetTargetPath(item.Category, src)
+
+			// Update status to "Starting..." if not already
+			m.updateItemState(item.Category, item.Index, func(it *Item) {
+				it.LocalStatus = "Starting download..."
+			})
+
+			cmds = append(cmds, DownloadCmd(item.Index, item.Category, src, target, m.Config.General.GitHubToken))
+		} else {
+			m.ActiveDownloads-- // Should not happen, but safety decrement
+		}
+	}
+
+	if len(cmds) > 0 {
+		return tea.Batch(cmds...)
+	}
+	return nil
 }
