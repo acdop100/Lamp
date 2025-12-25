@@ -32,11 +32,19 @@ var (
 func (m Model) View() string {
 	switch m.State {
 	case stateList:
+		// Dynamic Download Path for active tab
+		catName := m.Tabs[m.ActiveTab]
+		dlPath := m.Config.Categories[catName].Path
+		if dlPath == "" {
+			dlPath = m.Config.Storage.DefaultRoot
+		}
+
 		// Config Header
 		configHeader := lipgloss.NewStyle().
 			Foreground(sand).
-			PaddingLeft(2).
-			Render(fmt.Sprintf("Targets: OS=%v Arch=%v", m.Config.General.OS, m.Config.General.Arch))
+			Width(m.Width - 4).
+			Align(lipgloss.Center).
+			Render(fmt.Sprintf("Targets: OS=%v Arch=%v | Path: %s", m.Config.General.OS, m.Config.General.Arch, dlPath))
 
 		var tabs []string
 		for i, t := range m.Tabs {
@@ -47,7 +55,10 @@ func (m Model) View() string {
 			}
 		}
 
-		tabRow := tabRowStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, tabs...))
+		tabRow := tabRowStyle.
+			Width(m.Width - 4).
+			Align(lipgloss.Center).
+			Render(lipgloss.JoinHorizontal(lipgloss.Top, tabs...))
 
 		tableView := m.Tables[m.ActiveTab].View()
 
