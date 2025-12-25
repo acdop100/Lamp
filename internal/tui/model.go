@@ -244,14 +244,14 @@ type ProgressUpdateMsg struct {
 	ProgressChan chan downloader.Progress
 }
 
-func DownloadCmdBatch(index int, category, url, dest string, progressChan chan downloader.Progress) tea.Cmd {
+func DownloadCmdBatch(index int, category, url, dest string, threads int, progressChan chan downloader.Progress) tea.Cmd {
 	return func() tea.Msg {
-		err := downloader.DownloadFile(url, dest, progressChan)
+		err := downloader.DownloadFile(url, dest, threads, progressChan)
 		return DownloadMsg{Category: category, Index: index, Err: err}
 	}
 }
 
-func DownloadCmd(index int, category string, src config.Source, dest string, githubToken string) tea.Cmd {
+func DownloadCmd(index int, category string, src config.Source, dest string, githubToken string, threads int) tea.Cmd {
 	return func() tea.Msg {
 		progressChan := make(chan downloader.Progress, 10)
 
@@ -307,7 +307,7 @@ func DownloadCmd(index int, category string, src config.Source, dest string, git
 				}
 			}
 
-			downloader.DownloadFile(url, dest, progressChan)
+			downloader.DownloadFile(url, dest, threads, progressChan)
 		}()
 
 		return StartDownloadMsg{
@@ -376,7 +376,7 @@ func (m *Model) ProcessQueue() tea.Cmd {
 				it.LocalStatus = "Starting download..."
 			})
 
-			cmds = append(cmds, DownloadCmd(item.Index, item.Category, src, target, m.Config.General.GitHubToken))
+			cmds = append(cmds, DownloadCmd(item.Index, item.Category, src, target, m.Config.General.GitHubToken, m.Config.General.Threads))
 		} else {
 			m.ActiveDownloads-- // Should not happen, but safety decrement
 		}

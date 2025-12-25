@@ -2,6 +2,7 @@ storage:
   default_root: "./Downloads"
 
 general:
+  threads: 6
   os:
     # - "linux"
     - "macos"

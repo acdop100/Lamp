@@ -46,7 +46,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncTableRows(m.ActiveTab)
 
 			m.ActiveDownloads++ // Manual download counts towards concurrency
-			return m, DownloadCmd(idx, it.Category, it.Source, target, m.Config.General.GitHubToken)
+			return m, DownloadCmd(idx, it.Category, it.Source, target, m.Config.General.GitHubToken, m.Config.General.Threads)
 		case "D":
 			// Download all missing files in current tab
 			// Add to queue instead of firing immediately

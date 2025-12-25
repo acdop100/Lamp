@@ -21,6 +21,7 @@ type GeneralConfig struct {
 	OS          []string `yaml:"os"`
 	Arch        []string `yaml:"arch"`
 	GitHubToken string   `yaml:"github_token"`
+	Threads     int      `yaml:"threads"` // Number of parallel download segments
 }
 
 type Storage struct {
@@ -67,6 +68,9 @@ func LoadConfig(configPath string) (*Config, error) {
 	}
 	if len(cfg.General.Arch) == 0 {
 		cfg.General.Arch = []string{runtime.GOARCH}
+	}
+	if cfg.General.Threads <= 0 {
+		cfg.General.Threads = 4
 	}
 
 	// 1.5. Priority: Config > .env > Environment
