@@ -7,7 +7,7 @@ general:
     - "macos"
     - "windows"
   arch:
-    # - "amd64"
+    - "amd64"
     - "arm64"
 
 categories:
@@ -28,6 +28,8 @@ categories:
       - id: "balena-etcher"
       - id: "kiwix-desktop"
       - id: "kiwix-macos"
+      - id: "firefox"
+      - id: "chromium"
   Games:
     path: "./Downloads/Games"
     sources:

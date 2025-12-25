@@ -50,6 +50,7 @@ sources:
       # mGBA-0.10.3-appimage-x64.appimage
       # mGBA-0.10.3-win64.7z
       asset_pattern: "mGBA-.*-{{os_mgba}}{{arch_mgba}}.*"
+    exclude: ["windows/arm64"]
 
   # --- Media ---
   - id: "vlc"
@@ -74,4 +75,4 @@ sources:
       # JellyfinMediaPlayer-1.12.0-windows-x64.exe
       asset_pattern: "JellyfinMediaPlayer-.*-{{arch_jellyfin}}\\.{{ext}}"
       force_os_display: "true"
-    exclude: ["linux"] # Only .deb packages available for Linux
+    exclude: ["linux", "windows/arm64"] # Only .deb packages available for Linux

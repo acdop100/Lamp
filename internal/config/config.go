@@ -153,10 +153,10 @@ func expandSources(cfg *Config) {
 			usesOS := false
 			usesArch := false
 			for _, v := range src.Params {
-				if strings.Contains(v, "{{os") || strings.Contains(v, "{{ext") {
+				if strings.Contains(v, "{{os") || strings.Contains(v, "{{ext") || strings.Contains(v, "{{chromium_file}}") {
 					usesOS = true
 				}
-				if strings.Contains(v, "{{arch") {
+				if strings.Contains(v, "{{arch") || strings.Contains(v, "{{chromium_platform}}") || strings.Contains(v, "{{os_mozilla}}") {
 					usesArch = true
 				}
 			}
@@ -410,11 +410,16 @@ func substituteParams(src *Source, osName, archName string) {
 	}
 
 	// Kiwix
-	osKiwix := "linux"
+	osKiwix := ""
+	archKiwix := archFedora // amd64 -> x86_64
+	extKiwix := "appimage"
 	if osName == "macos" {
 		osKiwix = "macos"
+		extKiwix = "dmg"
 	} else if osName == "windows" {
-		osKiwix = "windows"
+		osKiwix = "windows_"
+		archKiwix = "x64"
+		extKiwix = "zip"
 	}
 
 	// OS naming variations
@@ -423,6 +428,73 @@ func substituteParams(src *Source, osName, archName string) {
 		osProper = "macOS"
 	} else if osName == "windows" {
 		osProper = "Windows"
+	}
+
+	// Mozilla Firefox
+	osMozilla := "linux64"
+	if osName == "macos" {
+		osMozilla = "osx"
+	} else if osName == "windows" {
+		if archName == "arm64" {
+			osMozilla = "win64-aarch64"
+		} else {
+			osMozilla = "win64"
+		}
+	} else if osName == "linux" {
+		if archName == "arm64" {
+			osMozilla = "linux64-aarch64"
+		} else if archName == "386" {
+			osMozilla = "linux"
+		}
+	}
+
+	// Google Chrome
+	osChrome := "linux"
+	archChrome := "amd64"
+	if osName == "macos" {
+		osChrome = "mac"
+	} else if osName == "windows" {
+		osChrome = "win"
+	}
+	if archName == "arm64" {
+		archChrome = "arm64"
+	}
+
+	// Chromium (Woolyss)
+	osChromium := "linux"
+	if osName == "macos" {
+		osChromium = "mac"
+	} else if osName == "windows" {
+		if archName == "386" {
+			osChromium = "windows-32-bit"
+		} else {
+			osChromium = "windows-64-bit"
+		}
+	}
+
+	// Chromium GCS Platform (Snapshots)
+	// Mac -> Intel, Mac_Arm -> Arm
+	// Linux_x64 -> Linux 64-bit
+	// Win -> Windows 32-bit, Win_x64 -> Windows 64-bit
+	chromiumPlatform := "Linux_x64" // Default
+	chromiumFile := "linux"
+	if osName == "macos" {
+		chromiumFile = "mac"
+		if archName == "arm64" {
+			chromiumPlatform = "Mac_Arm"
+		} else {
+			chromiumPlatform = "Mac"
+		}
+	} else if osName == "windows" {
+		chromiumFile = "win"
+		if archName == "386" {
+			chromiumPlatform = "Win"
+		} else {
+			chromiumPlatform = "Win_x64"
+		}
+	} else if osName == "linux" {
+		chromiumFile = "linux"
+		// Default Linux_x64
 	}
 
 	for k, v := range src.Params {
@@ -434,6 +506,13 @@ func substituteParams(src *Source, osName, archName string) {
 		v = strings.ReplaceAll(v, "{{os_vlc}}", osVLC)
 		v = strings.ReplaceAll(v, "{{os_melon}}", osMelon)
 		v = strings.ReplaceAll(v, "{{os_kiwix}}", osKiwix)
+		v = strings.ReplaceAll(v, "{{arch_kiwix}}", archKiwix)
+		v = strings.ReplaceAll(v, "{{ext_kiwix}}", extKiwix)
+		v = strings.ReplaceAll(v, "{{os_mozilla}}", osMozilla)
+		v = strings.ReplaceAll(v, "{{os_chrome}}", osChrome)
+		v = strings.ReplaceAll(v, "{{os_chromium}}", osChromium)
+		v = strings.ReplaceAll(v, "{{chromium_platform}}", chromiumPlatform)
+		v = strings.ReplaceAll(v, "{{chromium_file}}", chromiumFile)
 		v = strings.ReplaceAll(v, "{{arch}}", archName)
 		v = strings.ReplaceAll(v, "{{arch_fedora}}", archFedora)
 		v = strings.ReplaceAll(v, "{{arch_electron}}", archElectron)
@@ -442,6 +521,7 @@ func substituteParams(src *Source, osName, archName string) {
 		v = strings.ReplaceAll(v, "{{arch_balena}}", archBalena)
 		v = strings.ReplaceAll(v, "{{arch_jellyfin}}", archJellyfin)
 		v = strings.ReplaceAll(v, "{{arch_melon}}", archMelon)
+		v = strings.ReplaceAll(v, "{{arch_chrome}}", archChrome)
 		v = strings.ReplaceAll(v, "{{ext}}", ext)
 		v = strings.ReplaceAll(v, "{{ext_balena}}", extBalena)
 		src.Params[k] = v

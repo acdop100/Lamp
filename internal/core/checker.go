@@ -93,9 +93,19 @@ type RSSChannel struct {
 }
 
 type RSSItem struct {
-	Title   string `xml:"title"`
-	Link    string `xml:"link"`
-	PubDate string `xml:"pubDate"`
+	Title       string `xml:"title"`
+	Link        string `xml:"link"`
+	Description string `xml:"description"`
+	PubDate     string `xml:"pubDate"`
+}
+
+// GCS XML Structures
+type ListBucketResult struct {
+	CommonPrefixes []CommonPrefix `xml:"CommonPrefixes"`
+}
+
+type CommonPrefix struct {
+	Prefix string `xml:"Prefix"`
 }
 
 func CheckVersion(src config.Source, localPath string, githubToken string) CheckResult {
@@ -119,6 +129,12 @@ func CheckVersion(src config.Source, localPath string, githubToken string) Check
 		return resolveGithubRelease(src, localPath, githubToken)
 	case "rss_feed":
 		return resolveRSSFeed(src, localPath)
+	case "http_redirect":
+		return resolveHTTPRedirect(src, localPath)
+	case "chromium_rss":
+		return resolveChromiumRSS(src, localPath)
+	case "chromium_gcs":
+		return resolveChromiumGCS(src, localPath)
 	default:
 		// Fallback for direct URLs (legacy behavior)
 		if src.URL != "" {
@@ -624,6 +640,80 @@ func resolveRSSFeed(src config.Source, localPath string) CheckResult {
 	}
 }
 
+func resolveHTTPRedirect(src config.Source, localPath string) CheckResult {
+	targetURL := src.Params["url"]
+	versionPattern := src.Params["version_pattern"]
+
+	if targetURL == "" {
+		return CheckResult{Status: StatusError, Message: "Missing url param for http_redirect"}
+	}
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return nil // Follow all redirects
+		},
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Head(targetURL)
+	if err != nil {
+		return CheckResult{Status: StatusError, Message: "Redirect check failed: " + err.Error()}
+	}
+	defer resp.Body.Close()
+
+	resolvedURL := resp.Request.URL.String()
+	remoteFilename := filepath.Base(resolvedURL)
+
+	var latestVersion string
+	if versionPattern != "" {
+		reVer := regexp.MustCompile(versionPattern)
+		m := reVer.FindStringSubmatch(resolvedURL)
+		if len(m) > 1 {
+			latestVersion = m[1]
+		}
+	} else {
+		latestVersion = "latest"
+	}
+
+	targetDir := filepath.Dir(localPath)
+	fullLocalPath := filepath.Join(targetDir, remoteFilename)
+
+	// Local version detection
+	var currentVersion string
+	if versionPattern != "" {
+		reVer := regexp.MustCompile(versionPattern)
+		entries, _ := os.ReadDir(targetDir)
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				m := reVer.FindStringSubmatch(entry.Name())
+				if len(m) > 1 {
+					currentVersion = m[1]
+					break
+				}
+			}
+		}
+	}
+
+	if _, err := os.Stat(fullLocalPath); err == nil {
+		return CheckResult{Status: StatusUpToDate, Current: latestVersion, Latest: latestVersion, ResolvedURL: resolvedURL}
+	}
+
+	if currentVersion != "" {
+		return CheckResult{
+			Status:      StatusNewer,
+			Current:     currentVersion,
+			Latest:      latestVersion,
+			ResolvedURL: resolvedURL,
+		}
+	}
+
+	return CheckResult{
+		Status:      StatusNotFound,
+		Latest:      latestVersion,
+		ResolvedURL: resolvedURL,
+	}
+}
+
 func checkHTTPHeader(url string, localInfo os.FileInfo) CheckResult {
 	// ... (rest of checkHTTPHeader as before)
 	client := &http.Client{
@@ -660,4 +750,207 @@ func checkHTTPHeader(url string, localInfo os.FileInfo) CheckResult {
 	}
 
 	return CheckResult{Status: StatusUpToDate, Message: "No specific version changes detected via headers"}
+}
+
+func resolveChromiumRSS(src config.Source, localPath string) CheckResult {
+	feedURL := src.Params["feed_url"]
+	assetPattern := src.Params["asset_pattern"]
+	itemPattern := src.Params["item_pattern"]
+
+	if feedURL == "" || assetPattern == "" {
+		return CheckResult{Status: StatusError, Message: "Missing feed_url or asset_pattern for chromium_rss"}
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", feedURL, nil)
+	if err != nil {
+		return CheckResult{Status: StatusError, Message: "Failed to create request: " + err.Error()}
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return CheckResult{Status: StatusError, Message: "Failed to fetch RSS: " + err.Error()}
+	}
+	defer resp.Body.Close()
+
+	var rss RSS
+	if err := xml.NewDecoder(resp.Body).Decode(&rss); err != nil {
+		return CheckResult{Status: StatusError, Message: "Failed to parse RSS: " + err.Error()}
+	}
+
+	reAsset, err := regexp.Compile(assetPattern)
+	if err != nil {
+		return CheckResult{Status: StatusError, Message: "Invalid asset_pattern regex"}
+	}
+
+	var reItem *regexp.Regexp
+	if itemPattern != "" {
+		reItem, err = regexp.Compile(itemPattern)
+		if err != nil {
+			return CheckResult{Status: StatusError, Message: "Invalid item_pattern regex"}
+		}
+	}
+
+	// Regex for version or revision in description
+	reVer := regexp.MustCompile(`Version:\s*(\d+\.\d+\.\d+\.\d+)`)
+	reRev := regexp.MustCompile(`Revision:\s*(\d+)`)
+
+	var latestVersion string
+	var downloadURL string
+
+	for _, item := range rss.Channel.Items {
+		// Filter by item title if pattern provided
+		if reItem != nil && !reItem.MatchString(item.Title) {
+			continue
+		}
+
+		// Try to find version or revision
+		version := ""
+		if reVer.MatchString(item.Description) {
+			m := reVer.FindStringSubmatch(item.Description)
+			if len(m) > 1 {
+				version = m[1]
+			}
+		} else if reRev.MatchString(item.Description) {
+			m := reRev.FindStringSubmatch(item.Description)
+			if len(m) > 1 {
+				version = m[1]
+			}
+		}
+
+		if version == "" {
+			continue
+		}
+
+		// Find download link
+		reLink := regexp.MustCompile(`href="([^"]+)"`)
+		links := reLink.FindAllStringSubmatch(item.Description, -1)
+		for _, l := range links {
+			if len(l) > 1 {
+				url := l[1]
+				if reAsset.MatchString(url) {
+					latestVersion = version
+					downloadURL = url
+					break
+				}
+			}
+		}
+
+		if downloadURL != "" {
+			break
+		}
+	}
+
+	if downloadURL == "" {
+		return CheckResult{Status: StatusError, Message: "No matching Chromium asset found in RSS feed"}
+	}
+
+	targetDir := filepath.Dir(localPath)
+	remoteFilename := filepath.Base(downloadURL)
+	fullLocalPath := filepath.Join(targetDir, remoteFilename)
+
+	if _, err := os.Stat(fullLocalPath); err == nil {
+		return CheckResult{Status: StatusUpToDate, Current: "Unknown", Latest: latestVersion, ResolvedURL: downloadURL}
+	}
+
+	return CheckResult{
+		Status:      StatusNewer,
+		Current:     "None",
+		Latest:      latestVersion,
+		ResolvedURL: downloadURL,
+	}
+}
+
+func resolveChromiumGCS(src config.Source, localPath string) CheckResult {
+	prefix := src.Params["prefix"]     // e.g. "Mac" or "Mac_Arm"
+	filename := src.Params["filename"] // e.g. "chrome-mac.zip"
+
+	if prefix == "" || filename == "" {
+		return CheckResult{Status: StatusError, Message: "Missing prefix or filename for chromium_gcs"}
+	}
+
+	// 1. List 'directories' (prefixes) in the GCS bucket to find revisions
+	// URL: https://commondatastorage.googleapis.com/chromium-browser-snapshots/?delimiter=/&prefix=<prefix>/
+	metaURL := fmt.Sprintf("https://commondatastorage.googleapis.com/chromium-browser-snapshots/?delimiter=/&prefix=%s/", prefix)
+
+	resp, err := http.Get(metaURL)
+	if err != nil {
+		return CheckResult{Status: StatusError, Message: "Failed to fetch GCS list: " + err.Error()}
+	}
+	defer resp.Body.Close()
+
+	var result ListBucketResult
+	if err := xml.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return CheckResult{Status: StatusError, Message: "Failed to parse GCS XML: " + err.Error()}
+	}
+
+	// 2. Extract and sort revisions
+	// Prefixes are like "Mac_Arm/123456/" or "Mac_Arm/123456"
+	var revisions []int
+	reRev := regexp.MustCompile(`\/(\d+)\/?$`)
+
+	for _, cp := range result.CommonPrefixes {
+		m := reRev.FindStringSubmatch(cp.Prefix)
+		if len(m) > 1 {
+			var rev int
+			fmt.Sscanf(m[1], "%d", &rev)
+			revisions = append(revisions, rev)
+		}
+	}
+
+	if len(revisions) == 0 {
+		return CheckResult{Status: StatusError, Message: fmt.Sprintf("No revisions found for prefix '%s'", prefix)}
+	}
+
+	// Sort (descending to find latest)
+	sort.Sort(sort.Reverse(sort.IntSlice(revisions)))
+	latestRev := revisions[0]
+	latestRevStr := fmt.Sprintf("%d", latestRev)
+
+	// 3. Construct Download URL
+	// Format: https://commondatastorage.googleapis.com/chromium-browser-snapshots/<prefix>/<rev>/<filename>
+	downloadURL := fmt.Sprintf("https://commondatastorage.googleapis.com/chromium-browser-snapshots/%s/%d/%s", prefix, latestRev, filename)
+
+	// 4. Check if file exists (HEAD)
+	client := &http.Client{Timeout: 5 * time.Second}
+	headResp, err := client.Head(downloadURL)
+	if err != nil || headResp.StatusCode != http.StatusOK {
+		// If latest revision doesn't have the file (rare but possible during upload), try previous
+		if len(revisions) > 1 {
+			// fallback attempt
+			latestRev = revisions[1]
+			latestRevStr = fmt.Sprintf("%d", latestRev)
+			downloadURL = fmt.Sprintf("https://commondatastorage.googleapis.com/chromium-browser-snapshots/%s/%d/%s", prefix, latestRev, filename)
+		} else {
+			return CheckResult{Status: StatusError, Message: "File not found at calculated URL: " + downloadURL}
+		}
+	}
+	if headResp != nil {
+		headResp.Body.Close()
+	}
+
+	// Local version detection (simple file existence and metadata check if needed)
+	// We can't easily know the *revision* from the zip file name 'chrome-mac.zip' locally unless we saved a metadata file.
+	// For now, we rely on the user to update if they want to check. 
+	// Or we could rely on checking file size/modtime from headers vs local, but that is flaky for zips.
+	// Let's assume Update behavior: if user runs verify/update, we report latest.
+	// If file exists, we report UpToDate if we want to be conservative, or Newer if we assume freq updates.
+	// Let's report UpToDate if exists, unless we add version tracking.
+	// But the user wants 'check' to work.
+	// Without local version info (e.g. apps.state or filename versioning), we can't do exact comparison.
+	// We'll report 'Latest' version found.
+
+	targetDir := filepath.Dir(localPath)
+	fullLocalPath := filepath.Join(targetDir, filename)
+
+	if _, err := os.Stat(fullLocalPath); err == nil {
+		return CheckResult{Status: StatusUpToDate, Current: "installed", Latest: latestRevStr, ResolvedURL: downloadURL}
+	}
+	
+	return CheckResult{
+		Status:      StatusNotFound,
+		Latest:      latestRevStr, // Show the revision
+		ResolvedURL: downloadURL,
+	}
 }
