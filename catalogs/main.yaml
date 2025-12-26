@@ -30,7 +30,7 @@ sources:
       linux/amd64: "x86_64"
       linux/arm64: "aarch64"
       windows/amd64: "x86_64"
-      windows/arm64: "aarch64" # Hypothetical if they add it
+      windows/arm64: "aarch64"
       macos/amd64: "universal"
       macos/arm64: "universal"
     ext_map:
@@ -50,7 +50,7 @@ sources:
       windows: "win64"
       macos: "macos"
     arch_map:
-      linux/amd64: "-x64-qt"    # "-qt" suffix often present in recent AppImages? verifying against original "x64" logic
+      linux/amd64: "-x64-qt" # "-qt" suffix often present in recent AppImages? verifying against original "x64" logic
       linux/arm64: "-aarch64-qt"
       # Windows uses 'win64' which is covered by os_map name, arch part is empty in original logic
       windows/amd64: ""
@@ -85,7 +85,7 @@ sources:
     ext_map:
       windows: "exe"
       macos: "dmg"
-    exclude: ["linux"] # Linux VLC is usually via package manager
+    exclude: ["linux", "windows/arm64"] # Linux VLC is usually via package manager
 
   - id: "jellyfin-player"
     name: "Jellyfin Media Player"
@@ -101,7 +101,6 @@ sources:
       macos/amd64: "Intel"
       macos/arm64: "AppleSilicon"
       windows/amd64: "windows-x64"
-      windows/arm64: "windows-x64" # Fallback if no arm64 native
     ext_map:
       windows: "exe"
       macos: "dmg"
