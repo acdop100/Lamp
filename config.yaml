@@ -35,7 +35,6 @@ categories:
     path: "./Downloads/Games"
     sources:
       - id: "melonds"
-      - id: "melonds-macos"
       - id: "mgba"
   Media:
     path: "./Downloads/Media"

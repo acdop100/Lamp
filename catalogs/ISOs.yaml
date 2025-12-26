@@ -15,4 +15,7 @@ sources:
     strategy: "fedora_coreos"
     params:
       stream: "stable"
-      arch: "{{arch_fedora}}" # map amd64->x86_64
+      arch: "{{arch_map}}"
+    arch_map:
+      amd64: "x86_64"
+      arm64: "aarch64"

@@ -44,6 +44,11 @@ type Source struct {
 	Checksum string            `yaml:"checksum,omitempty"` // Checksum for integrity verification (e.g. sha256:...)
 	// Deprecated: URL is now resolved dynamically, but kept for direct overrides
 	URL string `yaml:"url,omitempty"`
+
+	// Configuration Maps
+	OSMap   map[string]string `yaml:"os_map,omitempty"`
+	ArchMap map[string]string `yaml:"arch_map,omitempty"`
+	ExtMap  map[string]string `yaml:"ext_map,omitempty"`
 }
 
 type Catalog struct {
@@ -92,10 +97,11 @@ func LoadConfig(configPath string) (*Config, error) {
 					continue
 				}
 				var catalog Catalog
-				if err := yaml.Unmarshal(data, &catalog); err == nil {
-					for _, s := range catalog.Sources {
-						catalogMap[s.ID] = s
-					}
+				if err := yaml.Unmarshal(data, &catalog); err != nil {
+					return nil, fmt.Errorf("failed to unmarshal catalog %s: %w", entry.Name(), err)
+				}
+				for _, s := range catalog.Sources {
+					catalogMap[s.ID] = s
 				}
 			}
 		}
@@ -157,12 +163,20 @@ func expandSources(cfg *Config) {
 			usesOS := false
 			usesArch := false
 			for _, v := range src.Params {
-				if strings.Contains(v, "{{os") || strings.Contains(v, "{{ext") || strings.Contains(v, "{{chromium_file}}") {
+				if strings.Contains(v, "{{os") || strings.Contains(v, "{{ext") {
 					usesOS = true
 				}
-				if strings.Contains(v, "{{arch") || strings.Contains(v, "{{chromium_platform}}") || strings.Contains(v, "{{os_mozilla}}") {
+				if strings.Contains(v, "{{arch") {
 					usesArch = true
 				}
+			}
+
+			// Force iteration if maps are present
+			if len(src.OSMap) > 0 {
+				usesOS = true
+			}
+			if len(src.ArchMap) > 0 {
+				usesArch = true
 			}
 
 			// Allow overriding display logic
@@ -174,17 +188,13 @@ func expandSources(cfg *Config) {
 			}
 
 			// Check if exclude list contains OS-specific exclusions (e.g., "linux/amd64")
-			// If so, we need to iterate over OS values even if params don't use OS
 			needsOSIteration := usesOS
 			needsArchIteration := usesArch
 			for _, ex := range src.Exclude {
 				if strings.Contains(ex, "/") {
-					// Exclude contains OS/arch combo, need to iterate both
 					needsOSIteration = true
 					needsArchIteration = true
 				} else if !usesArch && !usesOS {
-					// Simple exclusion like "arm64" or "macos"
-					// Try to determine if it's an OS or arch
 					if ex == "linux" || ex == "macos" || ex == "darwin" || ex == "windows" {
 						needsOSIteration = true
 					} else {
@@ -198,10 +208,6 @@ func expandSources(cfg *Config) {
 				continue
 			}
 
-			// Determine dimensions to iterate
-			// If not using OS, treat as single iteration [""]
-			// If not using Arch, treat as single iteration [""]
-
 			osList := []string{""}
 			if needsOSIteration {
 				osList = cfg.General.OS
@@ -212,9 +218,10 @@ func expandSources(cfg *Config) {
 				archList = cfg.General.Arch
 			}
 
-			// Cartesian Product of necessary dimensions
+			// cartesian product
 			type expandedKey struct {
 				os     string
+				arch   string
 				params string
 			}
 			seen := make(map[expandedKey]*Source)
@@ -222,7 +229,6 @@ func expandSources(cfg *Config) {
 
 			for _, osName := range osList {
 				for _, archName := range archList {
-					// Check exclusion
 					if isExcluded(src.Exclude, osName, archName) {
 						continue
 					}
@@ -233,23 +239,33 @@ func expandSources(cfg *Config) {
 						newSrc.Params[k] = v
 					}
 
+					if src.OSMap != nil {
+						newSrc.OSMap = make(map[string]string)
+						for k, v := range src.OSMap {
+							newSrc.OSMap[k] = v
+						}
+					}
+					if src.ArchMap != nil {
+						newSrc.ArchMap = make(map[string]string)
+						for k, v := range src.ArchMap {
+							newSrc.ArchMap[k] = v
+						}
+					}
+					if src.ExtMap != nil {
+						newSrc.ExtMap = make(map[string]string)
+						for k, v := range src.ExtMap {
+							newSrc.ExtMap[k] = v
+						}
+					}
+
 					substituteParams(&newSrc, osName, archName)
 
-					// De-duplicate based on OS + Params
 					paramStr := fmt.Sprintf("%v", newSrc.Params)
-					key := expandedKey{os: osName, params: paramStr}
+					// Key now includes arch to avoid merging Universal binaries into a single TUI line
+					// unless explicitly desired. This addresses the "amd64+arm64" confusion.
+					key := expandedKey{os: osName, arch: archName, params: paramStr}
 
-					if existing, ok := seen[key]; ok {
-						// If identical, append arch to name if not already there
-						// BUT: Don't append if arch_override is set, as it already represents the intended display
-						if usesArch && archName != "" && src.Params["arch_override"] == "" {
-							if !strings.Contains(existing.Name, archName) {
-								// Try to find the closing bracket
-								if strings.HasSuffix(existing.Name, "]") {
-									existing.Name = existing.Name[:len(existing.Name)-1] + "+" + archName + "]"
-								}
-							}
-						}
+					if _, ok := seen[key]; ok {
 						continue
 					}
 
@@ -259,7 +275,6 @@ func expandSources(cfg *Config) {
 						suffixParts = append(suffixParts, osName)
 					}
 					if usesArch {
-						// Use override if present, otherwise use expanded arch name
 						if override := src.Params["arch_override"]; override != "" {
 							suffixParts = append(suffixParts, override)
 						} else if archName != "" {
@@ -297,136 +312,14 @@ func expandSources(cfg *Config) {
 }
 
 func substituteParams(src *Source, osName, archName string) {
-	// Mappings
-	// OS
+	// Standard OS variations
 	osShort := osName
 	if osName == "macos" || osName == "darwin" {
 		osShort = "mac"
-	}
-	ext := "zip" // default
-	if osName == "linux" {
-		ext = "zip" // balena uses zip for linux
-	} else if osName == "macos" || osName == "darwin" {
-		ext = "dmg"
 	} else if osName == "windows" {
-		ext = "zip" // default for windows downloads
+		osShort = "win"
 	}
 
-	// Arch
-	// fedora: amd64->x86_64, arm64->aarch64
-	archFedora := archName
-	if archName == "amd64" {
-		archFedora = "x86_64"
-	} else if archName == "arm64" {
-		archFedora = "aarch64"
-	}
-
-	// electron/github: amd64->x64, arm64->arm64
-	archElectron := archName
-	if archName == "amd64" {
-		archElectron = "x64"
-	}
-
-	// VLC: amd64->intel64 (or blank), arm64->arm64
-	archVLC := archName
-	osVLC := osName
-	if osName == "macos" {
-		osVLC = "macosx"
-		if archName == "amd64" {
-			archVLC = "intel64"
-		}
-	} else if osName == "windows" {
-		if archName == "arm64" {
-			osVLC = "win-arm64"
-			archVLC = "win-arm64"
-		} else {
-			osVLC = "win64"
-			archVLC = "win64"
-		}
-		ext = "exe"
-	}
-
-	// mGBA: x64, arm64 (linux), macos/osx (macos)
-	archMGBA := "-" + archElectron
-	osMGBA := "appimage"
-	if osName == "macos" {
-		archMGBA = ""
-		if archName == "amd64" {
-			osMGBA = "osx" // Older Intel builds use osx marker
-		} else {
-			osMGBA = "macos" // Modern ARM/Universal use macos marker
-		}
-	} else if osName == "windows" {
-		// mGBA-0.10.3-win64.7z or mGBA-0.10.3-win64-setup.exe
-		// They don't have native arm64 windows build, fallback to win64
-		osMGBA = "win64"
-		archMGBA = ""
-		ext = "7z"
-	}
-
-	// Jellyfin: Intel, AppleSilicon
-	archJellyfin := archName
-	if osName == "macos" {
-		if archName == "amd64" {
-			archJellyfin = "Intel"
-		} else if archName == "arm64" {
-			archJellyfin = "AppleSilicon"
-		}
-	} else if osName == "windows" {
-		// No native arm64 binary yet, fallback to x64
-		archJellyfin = "windows-x64"
-		ext = "exe"
-	}
-
-	// BalenaEtcher: New v2.x naming
-	// macOS: balenaEtcher-2.1.4-arm64.dmg, balenaEtcher-2.1.4-x64.dmg
-	// Linux: balenaEtcher-linux-x64-2.1.4.zip
-	// Windows: balenaEtcher-Setup-2.1.4.exe
-	osBalena := ""
-	archBalena := archElectron
-	if osName == "linux" {
-		osBalena = "linux-"
-	} else if osName == "macos" {
-		// For Balena, macOS assets distinguish by arm64 vs x64 directly in the name
-		// We'll use archElectron which is already x64/arm64
-		archBalena = archElectron
-	} else if osName == "windows" {
-		osBalena = "Setup"
-		archBalena = "" // Windows setup doesn't always have arch in name for x64
-		ext = "exe"
-	}
-	extBalena := ext
-
-	// melonDS
-	osMelon := "appimage"
-	archMelon := archFedora
-	if osName == "macos" {
-		osMelon = "macOS"
-		archMelon = "universal"
-	} else if osName == "windows" {
-		osMelon = "windows"
-		if archName == "arm64" {
-			archMelon = "aarch64"
-		} else {
-			archMelon = "x86_64"
-		}
-		ext = "zip"
-	}
-
-	// Kiwix
-	osKiwix := ""
-	archKiwix := archFedora // amd64 -> x86_64
-	extKiwix := "appimage"
-	if osName == "macos" {
-		osKiwix = "macos"
-		extKiwix = "dmg"
-	} else if osName == "windows" {
-		osKiwix = "windows_"
-		archKiwix = "x64"
-		extKiwix = "zip"
-	}
-
-	// OS naming variations
 	osProper := "Linux"
 	if osName == "macos" {
 		osProper = "macOS"
@@ -434,100 +327,48 @@ func substituteParams(src *Source, osName, archName string) {
 		osProper = "Windows"
 	}
 
-	// Mozilla Firefox
-	osMozilla := "linux64"
-	if osName == "macos" {
-		osMozilla = "osx"
+	// 1. Extension Mapping
+	ext := "zip" // default
+	if osName == "linux" {
+		ext = "zip"
+	} else if osName == "macos" || osName == "darwin" {
+		ext = "dmg"
 	} else if osName == "windows" {
-		if archName == "arm64" {
-			osMozilla = "win64-aarch64"
-		} else {
-			osMozilla = "win64"
-		}
-	} else if osName == "linux" {
-		if archName == "arm64" {
-			osMozilla = "linux64-aarch64"
-		} else if archName == "386" {
-			osMozilla = "linux"
+		ext = "zip"
+	}
+	if val, ok := src.ExtMap[osName]; ok {
+		ext = val
+	}
+
+	// 2. OS Substitution
+	mappedOS := ""
+	if len(src.OSMap) > 0 {
+		if val, ok := src.OSMap[osName]; ok {
+			mappedOS = val
 		}
 	}
 
-	// Google Chrome
-	osChrome := "linux"
-	archChrome := "amd64"
-	if osName == "macos" {
-		osChrome = "mac"
-	} else if osName == "windows" {
-		osChrome = "win"
-	}
-	if archName == "arm64" {
-		archChrome = "arm64"
-	}
-
-	// Chromium (Woolyss)
-	osChromium := "linux"
-	if osName == "macos" {
-		osChromium = "mac"
-	} else if osName == "windows" {
-		if archName == "386" {
-			osChromium = "windows-32-bit"
+	// 3. Arch Substitution
+	mappedArch := ""
+	if len(src.ArchMap) > 0 {
+		compositeKey := fmt.Sprintf("%s/%s", osName, archName)
+		if val, ok := src.ArchMap[compositeKey]; ok {
+			mappedArch = val
 		} else {
-			osChromium = "windows-64-bit"
+			if val, ok := src.ArchMap[archName]; ok {
+				mappedArch = val
+			}
 		}
-	}
-
-	// Chromium GCS Platform (Snapshots)
-	// Mac -> Intel, Mac_Arm -> Arm
-	// Linux_x64 -> Linux 64-bit
-	// Win -> Windows 32-bit, Win_x64 -> Windows 64-bit
-	chromiumPlatform := "Linux_x64" // Default
-	chromiumFile := "linux"
-	if osName == "macos" {
-		chromiumFile = "mac"
-		if archName == "arm64" {
-			chromiumPlatform = "Mac_Arm"
-		} else {
-			chromiumPlatform = "Mac"
-		}
-	} else if osName == "windows" {
-		chromiumFile = "win"
-		if archName == "386" {
-			chromiumPlatform = "Win"
-		} else {
-			chromiumPlatform = "Win_x64"
-		}
-	} else if osName == "linux" {
-		chromiumFile = "linux"
-		// Default Linux_x64
 	}
 
 	for k, v := range src.Params {
 		v = strings.ReplaceAll(v, "{{os}}", osName)
 		v = strings.ReplaceAll(v, "{{os_short}}", osShort)
 		v = strings.ReplaceAll(v, "{{os_proper}}", osProper)
-		v = strings.ReplaceAll(v, "{{os_mgba}}", osMGBA)
-		v = strings.ReplaceAll(v, "{{os_balena}}", osBalena)
-		v = strings.ReplaceAll(v, "{{os_vlc}}", osVLC)
-		v = strings.ReplaceAll(v, "{{os_melon}}", osMelon)
-		v = strings.ReplaceAll(v, "{{os_kiwix}}", osKiwix)
-		v = strings.ReplaceAll(v, "{{arch_kiwix}}", archKiwix)
-		v = strings.ReplaceAll(v, "{{ext_kiwix}}", extKiwix)
-		v = strings.ReplaceAll(v, "{{os_mozilla}}", osMozilla)
-		v = strings.ReplaceAll(v, "{{os_chrome}}", osChrome)
-		v = strings.ReplaceAll(v, "{{os_chromium}}", osChromium)
-		v = strings.ReplaceAll(v, "{{chromium_platform}}", chromiumPlatform)
-		v = strings.ReplaceAll(v, "{{chromium_file}}", chromiumFile)
 		v = strings.ReplaceAll(v, "{{arch}}", archName)
-		v = strings.ReplaceAll(v, "{{arch_fedora}}", archFedora)
-		v = strings.ReplaceAll(v, "{{arch_electron}}", archElectron)
-		v = strings.ReplaceAll(v, "{{arch_vlc}}", archVLC)
-		v = strings.ReplaceAll(v, "{{arch_mgba}}", archMGBA)
-		v = strings.ReplaceAll(v, "{{arch_balena}}", archBalena)
-		v = strings.ReplaceAll(v, "{{arch_jellyfin}}", archJellyfin)
-		v = strings.ReplaceAll(v, "{{arch_melon}}", archMelon)
-		v = strings.ReplaceAll(v, "{{arch_chrome}}", archChrome)
 		v = strings.ReplaceAll(v, "{{ext}}", ext)
-		v = strings.ReplaceAll(v, "{{ext_balena}}", extBalena)
+		v = strings.ReplaceAll(v, "{{os_map}}", mappedOS)
+		v = strings.ReplaceAll(v, "{{arch_map}}", mappedArch)
 		src.Params[k] = v
 	}
 }
@@ -553,7 +394,6 @@ func expandTilde(path string) string {
 	return path
 }
 
-// GetTargetPath returns the final download path for a source
 func (c *Config) GetTargetPath(categoryName string, src Source) string {
 	cat, ok := c.Categories[categoryName]
 	if !ok {
@@ -570,10 +410,8 @@ func (c *Config) GetTargetPath(categoryName string, src Source) string {
 		filename = src.Name
 	}
 
-	// Ensure safe filename
 	filename = strings.ReplaceAll(filename, "/", "_")
 
-	// Organize by OS if present (now enforced by expansion)
 	if src.OS != "" {
 		return filepath.Join(basePath, src.OS, filename)
 	}
@@ -598,7 +436,6 @@ func loadEnv() {
 		if len(parts) == 2 {
 			key := strings.TrimSpace(parts[0])
 			val := strings.TrimSpace(parts[1])
-			// Only set if not already set in environment
 			if os.Getenv(key) == "" {
 				os.Setenv(key, val)
 			}

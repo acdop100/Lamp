@@ -6,7 +6,20 @@ sources:
       repo: "balena-io/etcher"
       # New v2.x format: balenaEtcher-2.1.4-arm64.dmg (macOS)
       # Linux: balenaEtcher-linux-x64-2.1.4.zip
-      asset_pattern: "balenaEtcher-.*{{os_balena}}{{arch_balena}}.*\\.{{ext_balena}}"
+      asset_pattern: "balenaEtcher-.*{{os_map}}{{arch_map}}.*\\.{{ext}}"
+    os_map:
+      linux: "linux-"
+      windows: "Setup"
+      macos: ""
+    arch_map:
+      linux/amd64: "x64"
+      linux/arm64: "arm64"
+      macos/amd64: "x64"
+      macos/arm64: "arm64"
+      windows/amd64: ""
+      windows/arm64: ""
+    ext_map:
+      windows: "exe"
     exclude: ["linux/arm64", "windows/arm64"]
 
   - id: "kiwix-desktop"
@@ -14,13 +27,23 @@ sources:
     strategy: "rss_feed"
     params:
       feed_url: "https://download.kiwix.org/release/kiwix-desktop/feed.xml"
-      item_pattern: "kiwix-desktop_{{os_kiwix}}{{arch_kiwix}}_.*\\.{{ext_kiwix}}"
+      item_pattern: "kiwix-desktop_{{os_map}}{{arch_map}}_.*\\.{{ext}}"
       version_pattern: "(\\d+\\.\\d+\\.\\d+)"
       force_os_display: "true"
+    os_map:
+      windows: "windows_"
+      linux: ""
+    arch_map:
+      linux/amd64: "x86_64"
+      linux/arm64: "aarch64"
+      windows/amd64: "x64"
+    ext_map:
+      linux: "appimage"
+      windows: "zip"
     exclude: ["macos", "arm64", "linux/arm64"]
 
   - id: "kiwix-macos"
-    name: "Kiwix Desktop" # Same name to group logically if sorted, or distinct
+    name: "Kiwix Desktop"
     strategy: "rss_feed"
     params:
       feed_url: "https://download.kiwix.org/release/kiwix-macos/feed.xml"
@@ -34,14 +57,29 @@ sources:
     name: "Chromium"
     strategy: "chromium_gcs"
     params:
-      prefix: "{{chromium_platform}}"
-      filename: "chrome-{{chromium_file}}.zip"
-    exclude: ["linux/arm64", "windows/arm64"] # Arm64 Linux snapshots often use different naming or aren't consistently available in main bucket under same structure without check
+      prefix: "{{arch_map}}"
+      filename: "chrome-{{os_map}}.zip"
+    os_map:
+      linux: "linux"
+      macos: "mac"
+      windows: "win"
+    arch_map:
+      linux/amd64: "Linux_x64"
+      macos/amd64: "Mac"
+      macos/arm64: "Mac_Arm"
+      windows/amd64: "Win_x64"
+    exclude: ["linux/arm64", "windows/arm64"]
 
   - id: "firefox"
     name: "Mozilla Firefox"
     strategy: "http_redirect"
     params:
-      url: "https://download.mozilla.org/?product=firefox-latest-ssl&os={{os_mozilla}}&lang=en-US"
+      url: "https://download.mozilla.org/?product=firefox-latest-ssl&os={{arch_map}}&lang=en-US"
       version_pattern: "releases/(\\d+\\.\\d+(?:\\.\\d+)*)"
-    # exclude: ["arm64"] - removed as we now support win-aarch64/linux64-aarch64 via config.go
+    arch_map:
+      linux/amd64: "linux64"
+      linux/arm64: "linux64-aarch64"
+      macos/amd64: "osx"
+      macos/arm64: "osx"
+      windows/amd64: "win64"
+      windows/arm64: "win64-aarch64"
