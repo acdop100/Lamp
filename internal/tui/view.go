@@ -31,6 +31,30 @@ var (
 
 func (m Model) View() string {
 	switch m.State {
+	case stateSplash:
+		warnStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("11")). // Yellow
+			Bold(true).
+			MarginBottom(1)
+
+		msgStyle := lipgloss.NewStyle().
+			Foreground(sand).
+			MarginTop(2)
+
+		var warnings string
+		for _, w := range m.Warnings {
+			warnings += fmt.Sprintf("- %s\n", w)
+		}
+
+		content := lipgloss.JoinVertical(lipgloss.Center,
+			warnStyle.Render("Configuration Warning:"),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(warnings),
+			msgStyle.Render("Press any key to continue..."),
+		)
+
+		// Center the content
+		return lipgloss.Place(m.Width, m.Height, lipgloss.Center, lipgloss.Center, docStyle.Render(content))
+
 	case stateList:
 		// Dynamic Download Path for active tab
 		catName := m.Tabs[m.ActiveTab]

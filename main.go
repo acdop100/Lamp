@@ -37,7 +37,19 @@ func main() {
 		log.Fatalf("Error loading config: %v", err)
 	}
 
+	// Check system compatibility
+	warnings := config.CheckSystemCompatibility(cfg)
+
 	if *checkMode {
+		if len(warnings) > 0 {
+			warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // Yellow
+			fmt.Println(warnStyle.Render("Configuration Warning:"))
+			for _, w := range warnings {
+				fmt.Println(warnStyle.Render("- " + w))
+			}
+			fmt.Println("") // Spacer
+		}
+
 		fmt.Println("Checking status of all monitored applications...")
 		fmt.Println("--------------------------------------------------")
 
@@ -90,7 +102,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	m := tui.NewModel(cfg)
+	m := tui.NewModel(cfg, warnings)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

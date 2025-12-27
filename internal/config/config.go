@@ -442,3 +442,45 @@ func loadEnv() {
 		}
 	}
 }
+
+func CheckSystemCompatibility(cfg *Config) []string {
+	var warnings []string
+	currentOS := runtime.GOOS
+	currentArch := runtime.GOARCH
+
+	osFound := false
+	for _, osName := range cfg.General.OS {
+		// Handle macOS/darwin alias
+		normalizedConfigOS := osName
+		if osName == "macos" {
+			normalizedConfigOS = "darwin"
+		}
+
+		if normalizedConfigOS == currentOS {
+			osFound = true
+			break
+		}
+	}
+
+	if !osFound {
+		displayOS := currentOS
+		if currentOS == "darwin" {
+			displayOS = "macos"
+		}
+		warnings = append(warnings, fmt.Sprintf("Current OS '%s' is not in config.general.os. Add it to receive updates for this machine.", displayOS))
+	}
+
+	archFound := false
+	for _, archName := range cfg.General.Arch {
+		if archName == currentArch {
+			archFound = true
+			break
+		}
+	}
+
+	if !archFound {
+		warnings = append(warnings, fmt.Sprintf("Current Architecture '%s' is not in config.general.arch. Add it to receive updates for this machine.", currentArch))
+	}
+
+	return warnings
+}
