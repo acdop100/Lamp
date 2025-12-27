@@ -1,6 +1,7 @@
 package main
 
 import (
+	"embed"
 	"flag"
 	"fmt"
 	"log"
@@ -20,6 +21,12 @@ var (
 	date    = "unknown"
 )
 
+//go:embed config.yaml.example catalogs
+var embeddedFiles embed.FS
+
+//go:embed config.yaml.example
+var defaultConfig []byte
+
 func main() {
 	checkMode := flag.Bool("check", false, "Check status of all monitored applications")
 	versionMode := flag.Bool("version", false, "Print version information")
@@ -32,7 +39,12 @@ func main() {
 		os.Exit(0)
 	}
 
-	cfg, err := config.LoadConfig("config.yaml")
+	if err := config.EnsureConfigExists(defaultConfig, embeddedFiles); err != nil {
+		fmt.Printf("Warning: failed to ensure config exists: %v\n", err)
+	}
+
+	// Pass empty string to load from default location
+	cfg, err := config.LoadConfig("", defaultConfig, embeddedFiles)
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}
