@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"tui-dl/internal/config"
 	"tui-dl/internal/core"
 
 	"github.com/charmbracelet/bubbles/table"
@@ -60,6 +61,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.syncTableRows(m.ActiveTab)
 			return m, m.ProcessQueue()
+		case "c":
+			// Open config directory
+			if dir, err := config.GetConfigDir(); err == nil {
+				core.OpenDir(dir)
+			}
+			return m, nil
 		case "f":
 			m.State = stateFolderSelect
 			return m, m.Filepicker.Init()

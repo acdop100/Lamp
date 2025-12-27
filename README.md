@@ -24,7 +24,7 @@
 - **Completely Configurable**: Easily add new catalog sources for applications, ISOs, and ZIMs, or almost any other asset you want to track!
 - **Update Checking**: Easy version checking between locally stored versions and the latest upstream releases.
 - **Disk Space Checking**: Ensures you have enough space to download a file before downloading it.
-- **GitHub API Integration**: Leverages the GitHub API to extend rate limits for relevant catalog sources.
+- **GitHub API Integration**: Leverages the GitHub API to extend rate limits for relevant catalog sources with a provided API key.
 
 ## Extensibility & Customization
 
@@ -70,16 +70,28 @@ go build -o lamp
 
 ### Configuration
 
-1. Copy the example configuration:
-   ```bash
-   cp config.yaml.example config.yaml
-   ```
-2. Edit `config.yaml` to select the applications and architectures you wish to track. **Even if catalog sources are configured, you must explicitly enable them in the config.yaml file.**
-3. (Optional) If you are managing applications from GitHub, add a `GITHUB_TOKEN` to your environment or `.env` file to increase API rate limits. See .env.example.
+On the first run, LAMP will automatically create a configuration directory and populate it with default settings and catalogs if they do not already exist.
+
+**Configuration Locations:**
+| Operating System | Path                                  |
+| :--------------- | :------------------------------------ |
+| **Windows**      | `%AppData%\lamp\`                     |
+| **macOS**        | `~/Library/Application Support/lamp/` |
+| **Linux**        | `~/.config/lamp/`                     |
+
+Within this directory, you will find:
+- `config.yaml`: Main application settings (download thread # & location, OS/Arch targets, and enabled sources).
+- `catalogs/`: Directory containing source definitions for various apps and assets.
+
+**Tips:**
+- **Easy Access**: Press `c` within the TUI to open your configuration directory in your default file manager.
+- **Local Override**: You can place a `config.yaml` in the same directory as the binary to override the global configuration if desired.
+- **GitHub Token**: If you are hitting rate limits from GitHub, add a `GITHUB_TOKEN` to your environment or a `.env` file in the configuration directory.
 
 ## Usage
 
 Launch the TUI:
+```bash
 ```bash
 ./lamp
 ```

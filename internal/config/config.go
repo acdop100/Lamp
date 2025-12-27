@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -55,11 +56,92 @@ type Catalog struct {
 	Sources []Source `yaml:"sources"`
 }
 
-func LoadConfig(configPath string) (*Config, error) {
-	// 1. Load User Config
+func GetConfigDir() (string, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "lamp"), nil
+}
+
+func EnsureConfigExists(defaultConfig []byte, catalogFS fs.FS) error {
+	configPath, err := GetConfigDir()
+	if err != nil {
+		return err
+	}
+
+	// Create config directory if it doesn't exist
+	if err := os.MkdirAll(configPath, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Write default config.yaml if it doesn't exist
+	configFile := filepath.Join(configPath, "config.yaml")
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		if err := os.WriteFile(configFile, defaultConfig, 0644); err != nil {
+			return fmt.Errorf("failed to write default config: %w", err)
+		}
+	}
+
+	// Write catalogs if they don't exist
+	catalogsDir := filepath.Join(configPath, "catalogs")
+	if err := os.MkdirAll(catalogsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create catalogs directory: %w", err)
+	}
+
+	entries, err := fs.ReadDir(catalogFS, "catalogs")
+	if err != nil {
+		return fmt.Errorf("failed to read embedded catalogs: %w", err)
+	}
+
+	for _, entry := range entries {
+		destPath := filepath.Join(catalogsDir, entry.Name())
+		if _, err := os.Stat(destPath); os.IsNotExist(err) {
+			srcPath := filepath.Join("catalogs", entry.Name())
+			data, err := fs.ReadFile(catalogFS, srcPath)
+			if err != nil {
+				continue
+			}
+			if err := os.WriteFile(destPath, data, 0644); err != nil {
+				// Log error but continue
+				continue
+			}
+		}
+	}
+
+	return nil
+}
+
+func LoadConfig(configPath string, defaultConfig []byte, catalogFS fs.FS) (*Config, error) {
+	// If configPath is empty, try to resolve it from the global directory
+	if configPath == "" {
+		dir, err := GetConfigDir()
+		if err == nil {
+			configPath = filepath.Join(dir, "config.yaml")
+		} else {
+			// Fallback to local
+			configPath = "config.yaml"
+		}
+	}
+
+	// 1. Load Config
+	// Check if file exists, if not and we are in local mode, fallback to default behavior (error)
+	// But since we run EnsureConfigExists before this in main, it should exist if we are using global.
+	// We allow overriding by passing a specific path (e.g. from flag)
+
+	// If the user manually provided a path (not implementable yet in main but good for future)
+	// Or if we resolved it to global config.
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		// Try local config.yaml as fallback if not absolute path
+		if !filepath.IsAbs(configPath) {
+			data, err = os.ReadFile("config.yaml")
+		}
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to read config file: %w", err)
+		}
 	}
 
 	var cfg Config
@@ -86,7 +168,12 @@ func LoadConfig(configPath string) (*Config, error) {
 
 	// 2. Load Catalogs
 	catalogMap := make(map[string]Source)
+
+	// Determine where to look for catalogs.
+	// If configPath is in global dir, look in global catalogs dir.
+	// If configPath is local, look in local catalogs dir.
 	catalogsDir := filepath.Join(filepath.Dir(configPath), "catalogs")
+
 	entries, err := os.ReadDir(catalogsDir)
 	if err == nil {
 		for _, entry := range entries {
