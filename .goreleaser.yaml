@@ -40,6 +40,8 @@ snapshot:
   version_template: "{{ .Version }}-snapshot"
 
 changelog:
+  use: github
+  abbrev: -1
   sort: asc
   filters:
     exclude:
