@@ -92,7 +92,6 @@ Within this directory, you will find:
 
 Launch the TUI:
 ```bash
-```bash
 ./lamp
 ```
 
