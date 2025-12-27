@@ -14,9 +14,23 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	checkMode := flag.Bool("check", false, "Check status of all monitored applications")
+	versionMode := flag.Bool("version", false, "Print version information")
 	flag.Parse()
+
+	if *versionMode {
+		fmt.Printf("LAMP version %s\n", version)
+		fmt.Printf("commit: %s\n", commit)
+		fmt.Printf("build date: %s\n", date)
+		os.Exit(0)
+	}
 
 	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
