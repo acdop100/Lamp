@@ -2,13 +2,14 @@ storage:
   default_root: "./Downloads"
 
 general:
+  threads: 6
   os:
-    - "linux"
+    # - "linux"
     - "macos"
+    - "windows"
   arch:
     - "amd64"
     - "arm64"
-  # github_token: "YOUR_GITHUB_TOKEN" # Optional: Store in .env as GITHUB_TOKEN instead
 
 categories:
   ISO Images:
@@ -20,10 +21,16 @@ categories:
     path: "./Downloads/Kiwix"
     sources:
       - id: "kiwix-wikipedia"
+      - id: "kiwix-phet"
+      - id: "kiwix-openstreetmap"
   Applications:
     path: "./Downloads/Apps"
     sources:
       - id: "balena-etcher"
+      - id: "kiwix-desktop"
+      - id: "kiwix-macos"
+      - id: "firefox"
+      - id: "chromium"
   Games:
     path: "./Downloads/Games"
     sources:

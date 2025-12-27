@@ -4,7 +4,6 @@ sources:
     strategy: "github_release"
     params:
       repo: "balena-io/etcher"
-      # New v2.x format: balenaEtcher-2.1.4-arm64.dmg (macOS)
       # Linux: balenaEtcher-linux-x64-2.1.4.zip
       asset_pattern: "balenaEtcher-.*{{os_map}}{{arch_map}}.*\\.{{ext}}"
     os_map:
@@ -40,7 +39,7 @@ sources:
     ext_map:
       linux: "appimage"
       windows: "zip"
-    exclude: ["macos", "arm64", "linux/arm64"]
+    exclude: ["macos", "arm64"]
 
   - id: "kiwix-macos"
     name: "Kiwix Desktop"
@@ -51,7 +50,7 @@ sources:
       version_pattern: "(\\d+\\.\\d+\\.\\d+)"
       force_os_display: "true"
       arch_override: "universal"
-    exclude: ["linux", "amd64", "windows"]
+    exclude: ["linux", "windows"]
 
   - id: "chromium"
     name: "Chromium"
