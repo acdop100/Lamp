@@ -32,6 +32,20 @@ var (
 func (m Model) View() string {
 	switch m.State {
 	case stateList:
+		// Dynamic Download Path for active tab
+		catName := m.Tabs[m.ActiveTab]
+		dlPath := m.Config.Categories[catName].Path
+		if dlPath == "" {
+			dlPath = m.Config.Storage.DefaultRoot
+		}
+
+		// Config Header
+		configHeader := lipgloss.NewStyle().
+			Foreground(sand).
+			Width(m.Width - 4).
+			Align(lipgloss.Center).
+			Render(fmt.Sprintf("Targets: OS=%v Arch=%v | Path: %s", m.Config.General.OS, m.Config.General.Arch, dlPath))
+
 		var tabs []string
 		for i, t := range m.Tabs {
 			if i == m.ActiveTab {
@@ -41,15 +55,27 @@ func (m Model) View() string {
 			}
 		}
 
-		tabRow := tabRowStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, tabs...))
-		listView := m.Lists[m.ActiveTab].View()
+		tabRow := tabRowStyle.
+			Width(m.Width - 4).
+			Align(lipgloss.Center).
+			Render(lipgloss.JoinHorizontal(lipgloss.Top, tabs...))
+
+		tableView := m.Tables[m.ActiveTab].View()
 
 		footer := lipgloss.NewStyle().
 			Foreground(sand).
 			MarginTop(1).
 			Render(" h/l: tabs • d: download • D: download all • u: check updates • q: quit")
 
-		return docStyle.Render(lipgloss.JoinVertical(lipgloss.Left, tabRow, listView, footer))
+		// Join everything into one string WITHOUT margins first
+		content := lipgloss.JoinVertical(lipgloss.Left,
+			configHeader,
+			tabRow,
+			tableView,
+			footer,
+		)
+
+		return docStyle.Render(content)
 
 	case stateFolderSelect:
 		return docStyle.Render(fmt.Sprintf(

@@ -1,0 +1,21 @@
+sources:
+  - id: "ubuntu-mate"
+    name: "Ubuntu Mate"
+    strategy: "web_scrape"
+    params:
+      base_url: "https://cdimage.ubuntu.com/ubuntu-mate/releases/"
+      # Find directories like "25.10/"
+      version_pattern: '(\d+\.\d+)/'
+      # Construct the ISO URL: base + version + template
+      file_template: "{{version}}/release/ubuntu-mate-{{version}}-desktop-{{arch}}.iso"
+    exclude: ["arm64"] # Only amd64 ISOs available
+
+  - id: "fedora-coreos"
+    name: "Fedora CoreOS"
+    strategy: "fedora_coreos"
+    params:
+      stream: "stable"
+      arch: "{{arch_map}}"
+    arch_map:
+      amd64: "x86_64"
+      arm64: "aarch64"

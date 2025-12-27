@@ -5,12 +5,23 @@ import (
 	"os"
 	"path/filepath"
 
+	"runtime"
+	"strings"
+
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Storage    Storage              `yaml:"storage"`
+	Storage    Storage             `yaml:"storage"`
+	General    GeneralConfig       `yaml:"general"`
 	Categories map[string]Category `yaml:"categories"`
+}
+
+type GeneralConfig struct {
+	OS          []string `yaml:"os"`
+	Arch        []string `yaml:"arch"`
+	GitHubToken string   `yaml:"github_token"`
+	Threads     int      `yaml:"threads"` // Number of parallel download segments
 }
 
 type Storage struct {
@@ -23,14 +34,30 @@ type Category struct {
 }
 
 type Source struct {
-	Name      string `yaml:"name"`
-	URL       string `yaml:"url"`
-	CheckType string `yaml:"check_type"`
-	OS        string `yaml:"os,omitempty"`
+	ID       string            `yaml:"id,omitempty"`
+	Name     string            `yaml:"name,omitempty"`
+	Strategy string            `yaml:"strategy,omitempty"`
+	Params   map[string]string `yaml:"params,omitempty"`
+	OS       string            `yaml:"os,omitempty"`
+	Arch     string            `yaml:"arch,omitempty"` // Added to track specific arch of expanded source
+	Exclude  []string          `yaml:"exclude,omitempty"`
+	Checksum string            `yaml:"checksum,omitempty"` // Checksum for integrity verification (e.g. sha256:...)
+	// Deprecated: URL is now resolved dynamically, but kept for direct overrides
+	URL string `yaml:"url,omitempty"`
+
+	// Configuration Maps
+	OSMap   map[string]string `yaml:"os_map,omitempty"`
+	ArchMap map[string]string `yaml:"arch_map,omitempty"`
+	ExtMap  map[string]string `yaml:"ext_map,omitempty"`
 }
 
-func LoadConfig(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+type Catalog struct {
+	Sources []Source `yaml:"sources"`
+}
+
+func LoadConfig(configPath string) (*Config, error) {
+	// 1. Load User Config
+	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -40,6 +67,85 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	// Defaults if empty
+	if len(cfg.General.OS) == 0 {
+		cfg.General.OS = []string{runtime.GOOS}
+	}
+	if len(cfg.General.Arch) == 0 {
+		cfg.General.Arch = []string{runtime.GOARCH}
+	}
+	if cfg.General.Threads <= 0 {
+		cfg.General.Threads = 4
+	}
+
+	// 1.5. Priority: Config > .env > Environment
+	loadEnv()
+	if cfg.General.GitHubToken == "" {
+		cfg.General.GitHubToken = os.Getenv("GITHUB_TOKEN")
+	}
+
+	// 2. Load Catalogs
+	catalogMap := make(map[string]Source)
+	catalogsDir := filepath.Join(filepath.Dir(configPath), "catalogs")
+	entries, err := os.ReadDir(catalogsDir)
+	if err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && (strings.HasSuffix(entry.Name(), ".yaml") || strings.HasSuffix(entry.Name(), ".yml")) {
+				catalogPath := filepath.Join(catalogsDir, entry.Name())
+				data, err := os.ReadFile(catalogPath)
+				if err != nil {
+					continue
+				}
+				var catalog Catalog
+				if err := yaml.Unmarshal(data, &catalog); err != nil {
+					return nil, fmt.Errorf("failed to unmarshal catalog %s: %w", entry.Name(), err)
+				}
+				for _, s := range catalog.Sources {
+					catalogMap[s.ID] = s
+				}
+			}
+		}
+	} else {
+		// Fallback to legacy catalog.yaml for backward compatibility
+		catalogPath := filepath.Join(filepath.Dir(configPath), "catalog.yaml")
+		data, err := os.ReadFile(catalogPath)
+		if err == nil {
+			var catalog Catalog
+			if err := yaml.Unmarshal(data, &catalog); err == nil {
+				for _, s := range catalog.Sources {
+					catalogMap[s.ID] = s
+				}
+			}
+		}
+	}
+
+	if len(catalogMap) > 0 {
+		// 3. Merge Catalog
+		for catName, cat := range cfg.Categories {
+			for i, src := range cat.Sources {
+				if src.ID != "" {
+					if original, ok := catalogMap[src.ID]; ok {
+						merged := original
+						if src.Name != "" {
+							merged.Name = src.Name
+						}
+						if src.OS != "" {
+							merged.OS = src.OS
+						}
+						if len(src.Exclude) > 0 {
+							merged.Exclude = append(merged.Exclude, src.Exclude...)
+						}
+						cat.Sources[i] = merged
+					}
+				}
+			}
+			cfg.Categories[catName] = cat
+		}
+	}
+
+	// 4. Expand Sources based on General OS/Arch
+	expandSources(&cfg)
+
 	// Expand tilde in paths
 	cfg.Storage.DefaultRoot = expandTilde(cfg.Storage.DefaultRoot)
 	for name, cat := range cfg.Categories {
@@ -48,6 +154,233 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func expandSources(cfg *Config) {
+	for catName, cat := range cfg.Categories {
+		var expandedSources []Source
+		for _, src := range cat.Sources {
+			usesOS := false
+			usesArch := false
+			for _, v := range src.Params {
+				if strings.Contains(v, "{{os") || strings.Contains(v, "{{ext") {
+					usesOS = true
+				}
+				if strings.Contains(v, "{{arch") {
+					usesArch = true
+				}
+			}
+
+			// Force iteration if maps are present
+			if len(src.OSMap) > 0 {
+				usesOS = true
+			}
+			if len(src.ArchMap) > 0 {
+				usesArch = true
+			}
+
+			// Allow overriding display logic
+			if src.Params["force_os_display"] == "true" {
+				usesOS = true
+			}
+			if src.Params["arch_override"] != "" {
+				usesArch = true // Force arch usage if override is present
+			}
+
+			// Check if exclude list contains OS-specific exclusions (e.g., "linux/amd64")
+			needsOSIteration := usesOS
+			needsArchIteration := usesArch
+			for _, ex := range src.Exclude {
+				if strings.Contains(ex, "/") {
+					needsOSIteration = true
+					needsArchIteration = true
+				} else if !usesArch && !usesOS {
+					if ex == "linux" || ex == "macos" || ex == "darwin" || ex == "windows" {
+						needsOSIteration = true
+					} else {
+						needsArchIteration = true
+					}
+				}
+			}
+
+			if !needsOSIteration && !needsArchIteration {
+				expandedSources = append(expandedSources, src)
+				continue
+			}
+
+			osList := []string{""}
+			if needsOSIteration {
+				osList = cfg.General.OS
+			}
+
+			archList := []string{""}
+			if needsArchIteration {
+				archList = cfg.General.Arch
+			}
+
+			// cartesian product
+			type expandedKey struct {
+				os     string
+				arch   string
+				params string
+			}
+			seen := make(map[expandedKey]*Source)
+			var keys []expandedKey
+
+			for _, osName := range osList {
+				for _, archName := range archList {
+					if isExcluded(src.Exclude, osName, archName) {
+						continue
+					}
+
+					newSrc := src
+					newSrc.Params = make(map[string]string)
+					for k, v := range src.Params {
+						newSrc.Params[k] = v
+					}
+
+					if src.OSMap != nil {
+						newSrc.OSMap = make(map[string]string)
+						for k, v := range src.OSMap {
+							newSrc.OSMap[k] = v
+						}
+					}
+					if src.ArchMap != nil {
+						newSrc.ArchMap = make(map[string]string)
+						for k, v := range src.ArchMap {
+							newSrc.ArchMap[k] = v
+						}
+					}
+					if src.ExtMap != nil {
+						newSrc.ExtMap = make(map[string]string)
+						for k, v := range src.ExtMap {
+							newSrc.ExtMap[k] = v
+						}
+					}
+
+					substituteParams(&newSrc, osName, archName)
+
+					paramStr := fmt.Sprintf("%v", newSrc.Params)
+					// Key now includes arch to avoid merging Universal binaries into a single TUI line
+					// unless explicitly desired. This addresses the "amd64+arm64" confusion.
+					key := expandedKey{os: osName, arch: archName, params: paramStr}
+
+					if _, ok := seen[key]; ok {
+						continue
+					}
+
+					// Build Name Suffix
+					var suffixParts []string
+					if usesOS && osName != "" {
+						suffixParts = append(suffixParts, osName)
+					}
+					if usesArch {
+						if override := src.Params["arch_override"]; override != "" {
+							suffixParts = append(suffixParts, override)
+						} else if archName != "" {
+							suffixParts = append(suffixParts, archName)
+						}
+					}
+
+					if len(suffixParts) > 0 {
+						newSrc.Name = fmt.Sprintf("%s [%s]", src.Name, strings.Join(suffixParts, "/"))
+					}
+
+					if usesOS {
+						newSrc.OS = osName
+					}
+					if usesArch {
+						if override := src.Params["arch_override"]; override != "" {
+							newSrc.Arch = override
+						} else {
+							newSrc.Arch = archName
+						}
+					}
+
+					seen[key] = &newSrc
+					keys = append(keys, key)
+				}
+			}
+
+			for _, k := range keys {
+				expandedSources = append(expandedSources, *seen[k])
+			}
+		}
+		cat.Sources = expandedSources
+		cfg.Categories[catName] = cat
+	}
+}
+
+func substituteParams(src *Source, osName, archName string) {
+	// Standard OS variations
+	osShort := osName
+	if osName == "macos" || osName == "darwin" {
+		osShort = "mac"
+	} else if osName == "windows" {
+		osShort = "win"
+	}
+
+	osProper := "Linux"
+	if osName == "macos" {
+		osProper = "macOS"
+	} else if osName == "windows" {
+		osProper = "Windows"
+	}
+
+	// 1. Extension Mapping
+	ext := "zip" // default
+	if osName == "linux" {
+		ext = "zip"
+	} else if osName == "macos" || osName == "darwin" {
+		ext = "dmg"
+	} else if osName == "windows" {
+		ext = "zip"
+	}
+	if val, ok := src.ExtMap[osName]; ok {
+		ext = val
+	}
+
+	// 2. OS Substitution
+	mappedOS := ""
+	if len(src.OSMap) > 0 {
+		if val, ok := src.OSMap[osName]; ok {
+			mappedOS = val
+		}
+	}
+
+	// 3. Arch Substitution
+	mappedArch := ""
+	if len(src.ArchMap) > 0 {
+		compositeKey := fmt.Sprintf("%s/%s", osName, archName)
+		if val, ok := src.ArchMap[compositeKey]; ok {
+			mappedArch = val
+		} else {
+			if val, ok := src.ArchMap[archName]; ok {
+				mappedArch = val
+			}
+		}
+	}
+
+	for k, v := range src.Params {
+		v = strings.ReplaceAll(v, "{{os}}", osName)
+		v = strings.ReplaceAll(v, "{{os_short}}", osShort)
+		v = strings.ReplaceAll(v, "{{os_proper}}", osProper)
+		v = strings.ReplaceAll(v, "{{arch}}", archName)
+		v = strings.ReplaceAll(v, "{{ext}}", ext)
+		v = strings.ReplaceAll(v, "{{os_map}}", mappedOS)
+		v = strings.ReplaceAll(v, "{{arch_map}}", mappedArch)
+		src.Params[k] = v
+	}
+}
+
+func isExcluded(excludeList []string, osName, archName string) bool {
+	combo := fmt.Sprintf("%s/%s", osName, archName)
+	for _, ex := range excludeList {
+		if ex == combo || ex == osName || ex == archName {
+			return true
+		}
+	}
+	return false
 }
 
 func expandTilde(path string) string {
@@ -61,7 +394,6 @@ func expandTilde(path string) string {
 	return path
 }
 
-// GetTargetPath returns the final download path for a source
 func (c *Config) GetTargetPath(categoryName string, src Source) string {
 	cat, ok := c.Categories[categoryName]
 	if !ok {
@@ -73,9 +405,40 @@ func (c *Config) GetTargetPath(categoryName string, src Source) string {
 		basePath = c.Storage.DefaultRoot
 	}
 
-	if src.OS != "" {
-		return filepath.Join(basePath, src.OS, filepath.Base(src.URL))
+	filename := filepath.Base(src.URL)
+	if src.URL == "" {
+		filename = src.Name
 	}
 
-	return filepath.Join(basePath, filepath.Base(src.URL))
+	filename = strings.ReplaceAll(filename, "/", "_")
+
+	if src.OS != "" {
+		return filepath.Join(basePath, src.OS, filename)
+	}
+
+	return filepath.Join(basePath, filename)
+}
+
+func loadEnv() {
+	data, err := os.ReadFile(".env")
+	if err != nil {
+		return
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			val := strings.TrimSpace(parts[1])
+			if os.Getenv(key) == "" {
+				os.Setenv(key, val)
+			}
+		}
+	}
 }

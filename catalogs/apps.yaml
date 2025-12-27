@@ -1,0 +1,84 @@
+sources:
+  - id: "balena-etcher"
+    name: "BalenaEtcher"
+    strategy: "github_release"
+    params:
+      repo: "balena-io/etcher"
+      # Linux: balenaEtcher-linux-x64-2.1.4.zip
+      asset_pattern: "balenaEtcher-.*{{os_map}}{{arch_map}}.*\\.{{ext}}"
+    os_map:
+      linux: "linux-"
+      windows: "Setup"
+      macos: ""
+    arch_map:
+      linux/amd64: "x64"
+      linux/arm64: "arm64"
+      macos/amd64: "x64"
+      macos/arm64: "arm64"
+      windows/amd64: ""
+      windows/arm64: ""
+    ext_map:
+      windows: "exe"
+    exclude: ["linux/arm64", "windows/arm64"]
+
+  - id: "kiwix-desktop"
+    name: "Kiwix Desktop"
+    strategy: "rss_feed"
+    params:
+      feed_url: "https://download.kiwix.org/release/kiwix-desktop/feed.xml"
+      item_pattern: "kiwix-desktop_{{os_map}}{{arch_map}}_.*\\.{{ext}}"
+      version_pattern: "(\\d+\\.\\d+\\.\\d+)"
+      force_os_display: "true"
+    os_map:
+      windows: "windows_"
+      linux: ""
+    arch_map:
+      linux/amd64: "x86_64"
+      linux/arm64: "aarch64"
+      windows/amd64: "x64"
+    ext_map:
+      linux: "appimage"
+      windows: "zip"
+    exclude: ["macos", "arm64"]
+
+  - id: "kiwix-macos"
+    name: "Kiwix Desktop"
+    strategy: "rss_feed"
+    params:
+      feed_url: "https://download.kiwix.org/release/kiwix-macos/feed.xml"
+      item_pattern: "kiwix-macos_.*\\.dmg"
+      version_pattern: "(\\d+\\.\\d+\\.\\d+)"
+      force_os_display: "true"
+      arch_override: "universal"
+    exclude: ["linux", "windows"]
+
+  - id: "chromium"
+    name: "Chromium"
+    strategy: "chromium_gcs"
+    params:
+      prefix: "{{arch_map}}"
+      filename: "chrome-{{os_map}}.zip"
+    os_map:
+      linux: "linux"
+      macos: "mac"
+      windows: "win"
+    arch_map:
+      linux/amd64: "Linux_x64"
+      macos/amd64: "Mac"
+      macos/arm64: "Mac_Arm"
+      windows/amd64: "Win_x64"
+    exclude: ["linux/arm64", "windows/arm64"]
+
+  - id: "firefox"
+    name: "Mozilla Firefox"
+    strategy: "http_redirect"
+    params:
+      url: "https://download.mozilla.org/?product=firefox-latest-ssl&os={{arch_map}}&lang=en-US"
+      version_pattern: "releases/(\\d+\\.\\d+(?:\\.\\d+)*)"
+    arch_map:
+      linux/amd64: "linux64"
+      linux/arm64: "linux64-aarch64"
+      macos/amd64: "osx"
+      macos/arm64: "osx"
+      windows/amd64: "win64"
+      windows/arm64: "win64-aarch64"

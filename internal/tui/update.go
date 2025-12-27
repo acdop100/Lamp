@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"tui-dl/internal/core"
 
+	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dustin/go-humanize"
 )
@@ -25,37 +26,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "u":
 			// Trigger update check for all items in active category
 			var cmds []tea.Cmd
-			items := m.Lists[m.ActiveTab].Items()
-			for i, item := range items {
-				it := item.(Item)
+			items := m.TableData[m.ActiveTab]
+			for i, it := range items {
 				target := m.Config.GetTargetPath(it.Category, it.Source)
-				cmds = append(cmds, checkSourceCmd(i, it.Category, it.Source, target))
+				cmds = append(cmds, checkSourceCmd(i, it.Category, it.Source, target, m.Config.General.GitHubToken))
 			}
 			return m, tea.Batch(cmds...)
 		case "d":
 			// Download selected item
-			idx := m.Lists[m.ActiveTab].Index()
-			it := m.Lists[m.ActiveTab].SelectedItem().(Item)
+			idx := m.Tables[m.ActiveTab].Cursor()
+			if idx < 0 || idx >= len(m.TableData[m.ActiveTab]) {
+				return m, nil
+			}
+			it := m.TableData[m.ActiveTab][idx]
 			target := m.Config.GetTargetPath(it.Category, it.Source)
 
 			it.LocalStatus = "Starting download..."
-			m.Lists[m.ActiveTab].SetItem(idx, it)
+			m.TableData[m.ActiveTab][idx] = it
+			m.syncTableRows(m.ActiveTab)
 
-			return m, DownloadCmd(idx, it.Category, it.Source.URL, target)
+			m.ActiveDownloads++ // Manual download counts towards concurrency
+			return m, DownloadCmd(idx, it.Category, it.Source, target, m.Config.General.GitHubToken, m.Config.General.Threads)
 		case "D":
 			// Download all missing files in current tab
-			var cmds []tea.Cmd
-			items := m.Lists[m.ActiveTab].Items()
-			for i, item := range items {
-				it := item.(Item)
+			// Add to queue instead of firing immediately
+			items := m.TableData[m.ActiveTab]
+			for i, it := range items {
 				if it.LocalStatus == "Local File Not Found" || it.LocalStatus == "Not Checked" {
-					target := m.Config.GetTargetPath(it.Category, it.Source)
-					it.LocalStatus = "Queued for download..."
-					m.Lists[m.ActiveTab].SetItem(i, it)
-					cmds = append(cmds, DownloadCmd(i, it.Category, it.Source.URL, target))
+					it.LocalStatus = "Queued"
+					m.TableData[m.ActiveTab][i] = it
+					m.DownloadQueue = append(m.DownloadQueue, QueueItem{Category: it.Category, Index: i})
 				}
 			}
-			return m, tea.Batch(cmds...)
+			m.syncTableRows(m.ActiveTab)
+			return m, m.ProcessQueue()
 		case "f":
 			m.State = stateFolderSelect
 			return m, m.Filepicker.Init()
@@ -67,7 +71,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case CheckMsg:
 		m.updateItemState(msg.Category, msg.Index, func(it *Item) {
+			it.Total = 0
+			it.Downloaded = 0
 			it.LocalStatus = msg.Result.Status
+			it.CurrentVersion = msg.Result.Current
+			it.LatestVersion = msg.Result.Latest
+			it.LocalMessage = msg.Result.Message
+			if msg.Result.ResolvedURL != "" {
+				it.Source.URL = msg.Result.ResolvedURL
+			}
 		})
 		return m, nil
 
@@ -79,8 +91,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			it.Downloaded = msg.Progress.Downloaded
 			it.Total = msg.Progress.Total
 
-			// Special handling for space check statuses
-			if it.Total == -1 {
+			// Special handling for space check and resolution statuses
+			if it.Total == -2 {
+				if msg.Progress.Downloaded == 0 {
+					it.LocalStatus = "Resolving URL..."
+				} else {
+					// Feedback from auto-resolution
+					it.LocalStatus = core.VersionStatus(msg.Progress.Status)
+					it.CurrentVersion = msg.Progress.Current
+					it.LatestVersion = msg.Progress.Latest
+					if msg.Progress.ResolvedURL != "" {
+						it.Source.URL = msg.Progress.ResolvedURL
+					}
+				}
+			} else if it.Total == -1 {
 				if it.Downloaded == 0 {
 					it.LocalStatus = "Checking available space..."
 				} else if it.Downloaded == 1 {
@@ -103,26 +127,61 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, WaitForProgress(msg.Index, msg.Category, msg.ProgressChan)
 
 	case DownloadMsg:
+		m.ActiveDownloads--
+		if m.ActiveDownloads < 0 {
+			m.ActiveDownloads = 0
+		}
+
+		var nextCmd tea.Cmd
 		m.updateItemState(msg.Category, msg.Index, func(it *Item) {
 			if msg.Err != nil {
 				it.LocalStatus = core.VersionStatus("Error: " + msg.Err.Error())
 			} else {
-				it.LocalStatus = "Finished"
-				it.Downloaded = it.Total
+				if it.Source.Checksum != "" {
+					it.LocalStatus = "Verifying integrity..."
+					target := m.Config.GetTargetPath(it.Category, it.Source)
+					nextCmd = VerifyCmd(msg.Index, msg.Category, target, it.Source.Checksum)
+				} else {
+					it.LocalStatus = "Finished"
+					it.Downloaded = 0
+					it.Total = 0
+				}
+			}
+		})
+
+		// Process queue and batch with nextCmd (verify or none)
+		queueCmd := m.ProcessQueue()
+		if nextCmd != nil && queueCmd != nil {
+			return m, tea.Batch(nextCmd, queueCmd)
+		} else if nextCmd != nil {
+			return m, nextCmd
+		}
+		return m, queueCmd
+
+	case VerifyMsg:
+		m.updateItemState(msg.Category, msg.Index, func(it *Item) {
+			if msg.Err != nil {
+				it.LocalStatus = core.VersionStatus("Checksum Failed")
+				it.LocalMessage = msg.Err.Error()
+			} else {
+				it.LocalStatus = "Verified & Finished"
+				it.Downloaded = 0
+				it.Total = 0
 			}
 		})
 		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.Width, m.Height = msg.Width, msg.Height
-		for i := range m.Lists {
-			m.Lists[i].SetSize(msg.Width, msg.Height-5) // Reserve space for tabs
+		m.resizeTableColumns(msg.Width)
+		for i := range m.Tables {
+			m.Tables[i].SetHeight(msg.Height - 11) // Reserve space for tabs, headers, footer
 		}
 	}
 
 	switch m.State {
 	case stateList:
-		m.Lists[m.ActiveTab], cmd = m.Lists[m.ActiveTab].Update(msg)
+		m.Tables[m.ActiveTab], cmd = m.Tables[m.ActiveTab].Update(msg)
 	case stateFolderSelect:
 		m.Filepicker, cmd = m.Filepicker.Update(msg)
 		if didSelect, _ := m.Filepicker.DidSelectDisabledFile(msg); didSelect {
@@ -139,13 +198,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) updateItemState(category string, index int, updateFn func(*Item)) {
 	for i, tab := range m.Tabs {
 		if tab == category {
-			items := m.Lists[i].Items()
-			if index >= 0 && index < len(items) {
-				it := items[index].(Item)
-				updateFn(&it)
-				m.Lists[i].SetItem(index, it)
+			if index >= 0 && index < len(m.TableData[i]) {
+				updateFn(&m.TableData[i][index])
+				m.syncTableRows(i)
 			}
 			return
 		}
 	}
+}
+
+func (m *Model) syncTableRows(tabIndex int) {
+	var rows []table.Row
+	for _, it := range m.TableData[tabIndex] {
+		rows = append(rows, it.ToRow())
+	}
+	m.Tables[tabIndex].SetRows(rows)
 }

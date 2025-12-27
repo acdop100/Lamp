@@ -1,0 +1,21 @@
+sources:
+  - id: "kiwix-phet"
+    name: "PhET Interactive Simulations"
+    strategy: "kiwix_feed"
+    params:
+      series: "phet_en_all"
+      feed_url: "https://library.kiwix.org/catalog/v2/entries"
+
+  - id: "kiwix-openstreetmap"
+    name: "OpenStreetMap"
+    strategy: "kiwix_feed"
+    params:
+      series: "openstreetmap-wiki_en_all_maxi"
+      feed_url: "https://library.kiwix.org/catalog/v2/entries"
+
+  - id: "kiwix-wikipedia"
+    name: "Wikipedia English"
+    strategy: "kiwix_feed"
+    params:
+      series: "wikipedia_en_all_maxi"
+      feed_url: "https://library.kiwix.org/catalog/v2/entries"

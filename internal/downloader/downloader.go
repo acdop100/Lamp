@@ -6,32 +6,20 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"syscall"
+	"sync"
+	"sync/atomic"
 )
-
-func CheckAvailableSpace(path string, requiredBytes int64) (bool, int64, error) {
-	// Ensure the parent directory exists so we can check the partition
-	dir := filepath.Dir(path)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return false, 0, err
-		}
-	}
-
-	var stat syscall.Statfs_t
-	err := syscall.Statfs(dir, &stat)
-	if err != nil {
-		return false, 0, err
-	}
-
-	// Available blocks * size per block
-	availableBytes := int64(stat.Bavail) * int64(stat.Bsize)
-	return availableBytes >= requiredBytes, availableBytes, nil
-}
 
 type Progress struct {
 	Total      int64
 	Downloaded int64
+	Error      error
+
+	// Results from auto-resolution
+	Status      string
+	Current     string
+	Latest      string
+	ResolvedURL string
 }
 
 type ProgressWriter struct {
@@ -47,28 +35,93 @@ func (pw *ProgressWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func DownloadFile(url, dest string, progressChan chan<- Progress) error {
+// DownloadFile downloads a file from url to dest, supporting parallel segments and resumption.
+func DownloadFile(url, dest string, threads int, progressChan chan<- Progress) error {
 	defer close(progressChan)
-	// Ensure directory exists
+
+	if url == "" {
+		return fmt.Errorf("empty download URL")
+	}
+
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
+	// 1. Get file info and check for range support
 	client := &http.Client{}
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("HEAD", url, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "tui-dl/1.0 (Bubble Tea Download Manager)")
+	req.Header.Set("User-Agent", "tui-dl/1.0")
 
 	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("HEAD request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	contentLength := resp.ContentLength
+	acceptRanges := resp.Header.Get("Accept-Ranges") == "bytes"
+
+	// Fallback to single-threaded if no range support or unknown size or small file
+	if !acceptRanges || contentLength <= 0 || threads <= 1 || contentLength < 1024*1024 {
+		return downloadSingle(url, dest, progressChan)
+	}
+
+	// 2. Prepare file
+	out, err := os.OpenFile(dest, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %w", err)
+	}
+	defer out.Close()
+
+	if err := out.Truncate(contentLength); err != nil {
+		return fmt.Errorf("failed to truncate file: %w", err)
+	}
+
+	// 3. Split into segments
+	chunkSize := contentLength / int64(threads)
+	var wg sync.WaitGroup
+	var downloaded int64
+	var errOnce sync.Once
+	var firstErr error
+
+	for i := 0; i < threads; i++ {
+		start := int64(i) * chunkSize
+		end := start + chunkSize - 1
+		if i == threads-1 {
+			end = contentLength - 1
+		}
+
+		wg.Add(1)
+		go func(s, e int64) {
+			defer wg.Done()
+			err := downloadSegment(url, out, s, e, &downloaded, contentLength, progressChan)
+			if err != nil {
+				errOnce.Do(func() {
+					firstErr = err
+				})
+			}
+		}(start, end)
+	}
+
+	wg.Wait()
+	return firstErr
+}
+
+func downloadSingle(url, dest string, progressChan chan<- Progress) error {
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("User-Agent", "tui-dl/1.0")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
 	out, err := os.Create(dest)
@@ -77,10 +130,12 @@ func DownloadFile(url, dest string, progressChan chan<- Progress) error {
 	}
 	defer out.Close()
 
+	var downloaded int64
+	_ = downloaded // Reserved for future use if we want per-segment in single too
 	pw := &ProgressWriter{
-		Total: resp.ContentLength,
+		Total:      resp.ContentLength,
+		Downloaded: 0,
 		onProgress: func(p Progress) {
-			// Non-blocking send
 			select {
 			case progressChan <- p:
 			default:
@@ -90,4 +145,50 @@ func DownloadFile(url, dest string, progressChan chan<- Progress) error {
 
 	_, err = io.Copy(out, io.TeeReader(resp.Body, pw))
 	return err
+}
+
+func downloadSegment(url string, out *os.File, start, end int64, totalDownloaded *int64, totalSize int64, progressChan chan<- Progress) error {
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+	req.Header.Set("User-Agent", "tui-dl/1.0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("segment HTTP %d", resp.StatusCode)
+	}
+
+	buffer := make([]byte, 32*1024)
+	offset := start
+	for {
+		n, readErr := resp.Body.Read(buffer)
+		if n > 0 {
+			_, writeErr := out.WriteAt(buffer[:n], offset)
+			if writeErr != nil {
+				return writeErr
+			}
+			offset += int64(n)
+			atomic.AddInt64(totalDownloaded, int64(n))
+
+			// Report progress
+			select {
+			case progressChan <- Progress{
+				Total:      totalSize,
+				Downloaded: atomic.LoadInt64(totalDownloaded),
+			}:
+			default:
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+	return nil
 }

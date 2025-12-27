@@ -1,0 +1,48 @@
+# default root directory of stored files
+storage:
+  default_root: "./Downloads"
+
+# General app settings
+general:
+  threads: 6
+  os:
+    # - "linux"
+    - "macos"
+    - "windows"
+  arch:
+    - "amd64"
+    - "arm64"
+
+# Categories are used to group assets in the TUI
+categories:
+  ISO Images:
+    # Specify a custom subpath for the category
+    path: "./Downloads/ISOs"
+    # Select which catalog entries to include in this category
+    sources:
+      - id: "ubuntu-mate"
+      - id: "fedora-coreos"
+  ZIMs:
+    path: "./Downloads/Kiwix"
+    sources:
+      - id: "kiwix-wikipedia"
+      - id: "kiwix-phet"
+      - id: "kiwix-openstreetmap"
+  Applications:
+    path: "./Downloads/Apps"
+    sources:
+      - id: "balena-etcher"
+      - id: "kiwix-desktop"
+      - id: "kiwix-macos"
+      - id: "firefox"
+      - id: "chromium"
+  Games:
+    path: "./Downloads/Games"
+    sources:
+      - id: "melonds"
+      - id: "mgba"
+  Media:
+    path: "./Downloads/Media"
+    sources:
+      - id: "vlc"
+      - id: "jellyfin-player"
