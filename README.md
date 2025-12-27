@@ -65,7 +65,6 @@ Clone the repository and build the binary:
 ```bash
 git clone https://github.com/acdop100/lamp.git
 cd lamp
-go get .
 go build -o lamp
 ```
 
@@ -80,12 +79,12 @@ go build -o lamp
 
 ## Usage
 
-Launch the interactive interface:
+Launch the TUI:
 ```bash
 ./lamp
 ```
 
-Run a quick status check via the CLI:
+Run a quick status check via the `-check` flag:
 ```bash
 $ ./lamp -check
 Checking status of all monitored applications...
