@@ -1,6 +1,8 @@
+# default root directory of stored files
 storage:
   default_root: "./Downloads"
 
+# General app settings
 general:
   threads: 6
   os:
@@ -11,9 +13,12 @@ general:
     - "amd64"
     - "arm64"
 
+# Categories are used to group assets in the TUI
 categories:
   ISO Images:
+    # Specify a custom subpath for the category
     path: "./Downloads/ISOs"
+    # Select which catalog entries to include in this category
     sources:
       - id: "ubuntu-mate"
       - id: "fedora-coreos"

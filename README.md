@@ -1,8 +1,10 @@
-# LAMP: Local Asset Management & Provisioning
+# LAMP: Local Asset Management Program
 
 **LAMP** is an amatuer TUI app designed to automate the downloading & management of software assets such as desktop and android applications, ISO files, and ZIM files across different operating systems and architectures.
 
-- [LAMP: Local Asset Management \& Provisioning](#lamp-local-asset-management--provisioning)
+![LAMP UI](assets/LAMP.png)
+
+- [LAMP: Local Asset Management Program](#lamp-local-asset-management-program)
   - [Key Features](#key-features)
   - [Extensibility \& Customization](#extensibility--customization)
   - [Getting Started](#getting-started)
