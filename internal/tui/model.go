@@ -22,7 +22,8 @@ import (
 type state int
 
 const (
-	stateList state = iota
+	stateSplash state = iota
+	stateList
 	stateChecking
 	stateDownloading
 	stateFolderSelect
@@ -88,6 +89,7 @@ type Model struct {
 	Height          int
 	DownloadQueue   []QueueItem
 	ActiveDownloads int
+	Warnings        []string
 }
 
 func progressBar(percent float64, width int) string {
@@ -118,7 +120,7 @@ func progressBar(percent float64, width int) string {
 	return fmt.Sprintf("%s %5.1f%%", bar, percent*100)
 }
 
-func NewModel(cfg *config.Config) Model {
+func NewModel(cfg *config.Config, warnings []string) Model {
 	tabs := make([]string, 0, len(cfg.Categories))
 	for name := range cfg.Categories {
 		tabs = append(tabs, name)
@@ -178,14 +180,20 @@ func NewModel(cfg *config.Config) Model {
 	fp.FileAllowed = false
 	fp.CurrentDirectory, _ = os.Getwd()
 
+	initialState := stateList
+	if len(warnings) > 0 {
+		initialState = stateSplash
+	}
+
 	return Model{
 		Config:     cfg,
-		State:      stateList,
+		State:      initialState,
 		Tabs:       tabs,
 		ActiveTab:  0,
 		Tables:     tables,
 		TableData:  tableData,
 		Filepicker: fp,
+		Warnings:   warnings,
 	}
 }
 
