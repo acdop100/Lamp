@@ -1,4 +1,4 @@
-module tui-dl
+module Lamp
 
 go 1.25.5
 
