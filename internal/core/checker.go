@@ -36,10 +36,11 @@ func parseRepo(repo string) (string, string, error) {
 type VersionStatus string
 
 const (
-	StatusUpToDate VersionStatus = "Up to Date"
-	StatusNewer    VersionStatus = "Newer Version Available"
-	StatusNotFound VersionStatus = "Local File Not Found"
-	StatusError    VersionStatus = "Error Checking"
+	StatusUpToDate   VersionStatus = "Up to Date"
+	StatusNewer      VersionStatus = "Newer Version Available"
+	StatusNotFound   VersionStatus = "Local File Not Found"
+	StatusDownloaded VersionStatus = "Downloaded"
+	StatusError      VersionStatus = "Error Checking"
 )
 
 type CheckResult struct {
@@ -106,6 +107,153 @@ type ListBucketResult struct {
 
 type CommonPrefix struct {
 	Prefix string `xml:"Prefix"`
+}
+
+func ScanLocalStatus(src config.Source, localPath string) CheckResult {
+	targetDir := filepath.Dir(localPath)
+
+	// Check if the specific file matches exact path (if filename is static)
+	if _, err := os.Stat(localPath); err == nil {
+		// Only valid if localPath doesn't point to a directory or generic name
+		if !strings.HasSuffix(localPath, src.Name) {
+			return CheckResult{Status: StatusDownloaded, Current: "installed"}
+		}
+	}
+
+	// Check if target directory exists
+	entries, err := os.ReadDir(targetDir)
+	if err != nil {
+		return CheckResult{Status: StatusNotFound}
+	}
+
+	// Strategy-agnostic pattern matching based on Params
+	var patterns []string
+
+	// 1. Explicit Filename
+	if fname := src.Params["filename"]; fname != "" {
+		patterns = append(patterns, "^"+regexp.QuoteMeta(fname)+"$")
+	}
+
+	// 2. Asset Pattern (GitHub, Chromium RSS)
+	if pat := src.Params["asset_pattern"]; pat != "" {
+		patterns = append(patterns, pat)
+	}
+
+	// 3. Item Pattern (RSS)
+	if pat := src.Params["item_pattern"]; pat != "" {
+		patterns = append(patterns, pat)
+	}
+
+	// 4. File Template (Web Scrape)
+	if tpl := src.Params["file_template"]; tpl != "" {
+		// Extract filename part: "vlc-{{version}}-win64.exe"
+		base := filepath.Base(tpl)
+		// Escape special chars
+		base = strings.ReplaceAll(base, ".", "\\.")
+		// Replace version placeholder with capture group
+		base = strings.ReplaceAll(base, "{{version}}", `(\d+\.\d+(?:\.\d+)*)`)
+		patterns = append(patterns, "^"+base+"$")
+	}
+
+	// Helper to scan with specific patterns
+	scanWithPatterns := func(regexStrs []string) CheckResult {
+		for _, pat := range regexStrs {
+			// Ensure capture group for version if missing
+			if !strings.Contains(pat, "(") {
+				pat = strings.Replace(pat, ".*", "(.*?)", 1)
+			}
+			// Ensure anchors
+			if !strings.HasPrefix(pat, "^") {
+				pat = "^" + pat
+			}
+			if !strings.HasSuffix(pat, "$") {
+				pat = pat + "$"
+			}
+
+			re, err := regexp.Compile(pat)
+			if err != nil {
+				continue
+			}
+
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				if re.MatchString(entry.Name()) {
+					m := re.FindStringSubmatch(entry.Name())
+					version := "installed"
+					if len(m) > 1 {
+						version = m[1]
+						version = strings.TrimPrefix(version, "v")
+						version = strings.Trim(version, "-_ ")
+					}
+					return CheckResult{Status: StatusDownloaded, Current: version}
+				}
+			}
+		}
+		return CheckResult{Status: StatusNotFound}
+	}
+
+	if len(patterns) > 0 {
+		return scanWithPatterns(patterns)
+	}
+
+	// 5. Fallback: Name-based matching with Architecture Enforcement
+	// If no precise patterns are available (e.g. http_redirect without pattern),
+	// use fuzzy matching but strictly check for architecture presence to avoid cross-match.
+
+	// Prepare terms
+	var terms []string
+	if src.ID != "" {
+		terms = append(terms, strings.ToLower(src.ID))
+	}
+
+	// Clean name
+	name := src.Name
+	if idx := strings.Index(name, " ["); idx != -1 {
+		name = name[:idx]
+	}
+	parts := strings.Fields(name)
+	if len(parts) > 0 {
+		terms = append(terms, strings.ToLower(parts[0]))
+	}
+
+	versionRe := regexp.MustCompile(`[_\-]v?(\d+\.\d+(?:\.\d+)*)`)
+	requiredArch := strings.ToLower(src.Arch)
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		fileName := entry.Name()
+		lowerName := strings.ToLower(fileName)
+
+		// Must match at least one term
+		match := false
+		for _, term := range terms {
+			if strings.Contains(lowerName, term) {
+				match = true
+				break
+			}
+		}
+
+		// Optimization: Enforce Architecture if known
+		// If src.Arch is set (e.g. "win64"), the filename MUST contain it.
+		// This prevents "Firefox [win64]" matching "FirefoxSetup.exe" (generic) or "Firefox-arm64.zip"
+		if requiredArch != "" && !strings.Contains(lowerName, requiredArch) {
+			match = false
+		}
+
+		if match {
+			version := "installed"
+			if m := versionRe.FindStringSubmatch(fileName); len(m) > 1 {
+				version = m[1]
+			}
+			return CheckResult{Status: StatusDownloaded, Current: version}
+		}
+	}
+
+	return CheckResult{Status: StatusNotFound}
 }
 
 func CheckVersion(src config.Source, localPath string, githubToken string) CheckResult {

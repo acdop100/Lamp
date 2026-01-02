@@ -6,7 +6,8 @@
 
 - [LAMP: Local Asset Management Program](#lamp-local-asset-management-program)
   - [Key Features](#key-features)
-  - [Extensibility \& Customization](#extensibility--customization)
+  - [Documentation](#documentation)
+  - [Extensibility](#extensibility)
   - [Getting Started](#getting-started)
     - [Prerequisites](#prerequisites)
     - [Installation](#installation)
@@ -15,33 +16,28 @@
     - [Configuration](#configuration)
   - [Usage](#usage)
 
----
-
 ## Key Features
 
-- **Interactive TUI**: A high-performance terminal interface built with the Charmbracelet `bubbletea` framework (Thanks!).
-- **Multi-Platform & Multi-Architecture Support**: Manages assets for Windows, macOS, and Linux for both AMD64 and ARM64 architectures.
-- **Completely Configurable**: Easily add new catalog sources for applications, ISOs, and ZIMs, or almost any other asset you want to track!
-- **Update Checking**: Easy version checking between locally stored versions and the latest upstream releases.
-- **Disk Space Checking**: Ensures you have enough space to download a file before downloading it.
-- **GitHub API Integration**: Leverages the GitHub API to extend rate limits for relevant catalog sources with a provided API key.
+- **Interactive TUI**: A high-performance terminal interface built with the Charmbracelet `bubbletea` framework.
+- **Multi-Platform Support**: Manages assets for Windows, macOS, and Linux (AMD64/ARM64).
+- **Project Gutenberg Integration**: Browse, search, and download thousands of public domain ebooks directly from LAMP.
+- **Local Detection**: Automatically detects existing files on disk, even if you didn't download them with LAMP.
+- **Selective Updates**: Check for updates and only download files that have a newer version available (`U` key).
+- **Flexible Catalogs**: Supports GitHub Releases, RSS Feeds, Web Scraping, and more.
 
-## Extensibility & Customization
+## Documentation
 
-LAMP is built with a "Configuration-as-Code" philosophy, making it highly extensible:
+For detailed instructions on configuration, custom catalogs, and advanced usage, please see **[USAGE.md](USAGE.md)**.
 
-- **YAML Catalogs**: Easily expand the ecosystem by adding custom `.yaml` definitions in the `catalogs/` directory.
-- **Flexible Strategies**: Supports multiple version-tracking strategies, including GitHub Releases, RSS feeds, and dynamic URL resolution.
-- **Source Expansion**: Define a single source and let LAMP automatically expand it into architecture-specific entries (e.g., `{{os}}`, `{{arch}}`, `{{ext}}`).
-- **Path Overrides**: Fully configurable storage structure to organize your assets how you want them.
-- **Template Mapping**: Flexible template mapping for customizing asset names and paths, with automatic OS subdirectory placement if relevant.
+## Extensibility
 
-For example: `"kiwix-desktop_{{os_map}}{{arch_map}}_.*\\.{{ext}}"` can expand to:
+LAMP is built with a "Configuration-as-Code" philosophy. **You can easily expand the ecosystem by adding custom catalogs in the `catalogs/` directory.**
 
-- `kiwix-desktop_x86_64_2.4.1.appimage`
-- `kiwix-desktop_windows_x64_2.4.1.zip`
+- **YAML Catalogs**: Define your own sources.
+- **Dynamic Strategies**: Use built-in strategies like `github_release` or `web_scrape`.
+- **Variable Expansion**: Automatically handle multiple OS/Arch targets with a single definition.
 
-Note: `{{os_map}}` and `{{arch_map}}` are automatically mapped to their respective values based on the `os_map` and `arch_map` parameters in the `catalogs/apps.yaml` catalog file under the `kiwix-desktop` source.
+See [USAGE.md](USAGE.md#catalogs-system) for the full guide on creating custom catalogs.
 
 ## Getting Started
 
@@ -68,25 +64,25 @@ cd lamp
 go build -o lamp
 ```
 
+or via `go install`:
+
+```bash
+go install github.com/acdop100/lamp@latest
+```
+
 ### Configuration
 
-On the first run, LAMP will automatically create a configuration directory and populate it with default settings and catalogs if they do not already exist.
+On the first run, LAMP will automatically create a configuration directory at:
 
-**Configuration Locations:**
-| Operating System | Path                                  |
-| :--------------- | :------------------------------------ |
-| **Windows**      | `%AppData%\lamp\`                     |
-| **macOS**        | `~/Library/Application Support/lamp/` |
-| **Linux**        | `~/.config/lamp/`                     |
+| OS          | Path                                  |
+| :---------- | :------------------------------------ |
+| **Windows** | `%AppData%\lamp\`                     |
+| **macOS**   | `~/Library/Application Support/lamp/` |
+| **Linux**   | `~/.config/lamp/`                     |
 
-Within this directory, you will find:
-- `config.yaml`: Main application settings (download thread # & location, OS/Arch targets, and enabled sources).
-- `catalogs/`: Directory containing source definitions for various apps and assets.
+Press `c` in the app to open this folder.
 
-**Tips:**
-- **Easy Access**: Press `c` within the TUI to open your configuration directory in your default file manager.
-- **Local Override**: You can place a `config.yaml` in the same directory as the binary to override the global configuration if desired.
-- **GitHub Token**: If you are hitting rate limits from GitHub, add a `GITHUB_TOKEN` to your environment or a `.env` file in the configuration directory.
+For full configuration options, including how to set up `config.yaml` and GitHub tokens, see [USAGE.md](USAGE.md#configuration).
 
 ## Usage
 

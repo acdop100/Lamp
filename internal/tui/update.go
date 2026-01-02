@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"lamp/internal/config"
 	"lamp/internal/core"
+	"lamp/internal/downloader"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -23,6 +24,68 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Handle search mode input
+		if m.State == stateSearch {
+			switch msg.String() {
+			case "esc":
+				m.State = stateList
+				m.SearchActive = false
+				m.SearchInput.Reset()
+				cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
+				var lang string
+				isGutenberg := false
+				for _, src := range cat.Sources {
+					if src.Strategy == "gutenberg" {
+						isGutenberg = true
+						lang = src.Params["language"]
+						if lang == "" {
+							lang = "en"
+						}
+						break
+					}
+				}
+				if isGutenberg {
+					if catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]; ok {
+						catalog.Loading = true
+						catalog.SearchQuery = ""
+					}
+					return m, FetchGutenbergCmd(m.Tabs[m.ActiveTab], lang, m.Config)
+				}
+				return m, nil
+			case "enter":
+				query := m.SearchInput.Value()
+				if query != "" {
+					cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
+					var lang string
+					isGutenberg := false
+					for _, src := range cat.Sources {
+						if src.Strategy == "gutenberg" {
+							isGutenberg = true
+							lang = src.Params["language"]
+							if lang == "" {
+								lang = "en"
+							}
+							break
+						}
+					}
+
+					if isGutenberg {
+						m.State = stateList
+						m.SearchActive = false
+						if catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]; ok {
+							catalog.Loading = true
+							catalog.SearchQuery = query
+						}
+						return m, SearchGutenbergCmd(m.Tabs[m.ActiveTab], query, lang, m.Config)
+					}
+				}
+				return m, nil
+			}
+			// Update text input
+			m.SearchInput, cmd = m.SearchInput.Update(msg)
+			return m, cmd
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -32,8 +95,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "left", "h", "[":
 			m.ActiveTab = (m.ActiveTab - 1 + len(m.Tabs)) % len(m.Tabs)
 			return m, nil
+		case "/", "s":
+			// Enter search mode (only for dynamic catalogs like Gutenberg)
+			cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
+			isGutenberg := false
+			for _, src := range cat.Sources {
+				if src.Strategy == "gutenberg" {
+					isGutenberg = true
+					break
+				}
+			}
+			if isGutenberg {
+				m.State = stateSearch
+				m.SearchActive = true
+				m.SearchInput.Focus()
+				return m, nil
+			}
 		case "u":
-			// Trigger update check for all items in active category
+			// Trigger update check for all items in active category (not for Gutenberg)
+			if m.isGutenbergTab(m.ActiveTab) {
+				return m, nil
+			}
 			var cmds []tea.Cmd
 			items := m.TableData[m.ActiveTab]
 			for i, it := range items {
@@ -43,6 +125,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		case "d":
 			// Download selected item
+			if m.isGutenbergTab(m.ActiveTab) {
+				return m.handleGutenbergDownload()
+			}
 			idx := m.Tables[m.ActiveTab].Cursor()
 			if idx < 0 || idx >= len(m.TableData[m.ActiveTab]) {
 				return m, nil
@@ -57,7 +142,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ActiveDownloads++ // Manual download counts towards concurrency
 			return m, DownloadCmd(idx, it.Category, it.Source, target, m.Config.General.GitHubToken, m.Config.General.Threads)
 		case "D":
-			// Download all missing files in current tab
+			// Download all missing files in current tab (not for Gutenberg)
+			if m.isGutenbergTab(m.ActiveTab) {
+				return m, nil
+			}
 			// Add to queue instead of firing immediately
 			items := m.TableData[m.ActiveTab]
 			for i, it := range items {
@@ -70,7 +158,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncTableRows(m.ActiveTab)
 			return m, m.ProcessQueue()
 		case "U":
-			// Update all files with newer versions available in current tab
+			// Update all files with newer versions available in current tab (not for Gutenberg)
+			if m.isGutenbergTab(m.ActiveTab) {
+				return m, nil
+			}
 			// Add to queue instead of firing immediately
 			items := m.TableData[m.ActiveTab]
 			for i, it := range items {
@@ -94,8 +185,75 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			if m.State == stateFolderSelect {
 				m.State = stateList
+				return m, nil
+			}
+			// Reset Gutenberg results to Top 100 if searching
+			cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
+			isGutenberg := false
+			var lang string
+			for _, src := range cat.Sources {
+				if src.Strategy == "gutenberg" {
+					isGutenberg = true
+					lang = src.Params["language"]
+					if lang == "" {
+						lang = "en"
+					}
+					break
+				}
+			}
+			if isGutenberg {
+				if catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]; ok && catalog.SearchQuery != "" {
+					catalog.Loading = true
+					catalog.SearchQuery = ""
+					return m, FetchGutenbergCmd(m.Tabs[m.ActiveTab], lang, m.Config)
+				}
 			}
 		}
+
+	case DynamicCatalogLoadedMsg:
+		if catalog, ok := m.DynamicCatalogs[msg.TabName]; ok {
+			catalog.Loading = false
+			if msg.Err != nil {
+				catalog.Error = msg.Err.Error()
+			} else {
+				catalog.Items = msg.Items
+				catalog.Error = ""
+				m.syncGutenbergTable(msg.TabName)
+			}
+		}
+		return m, nil
+
+	case DynamicCatalogSearchMsg:
+		if catalog, ok := m.DynamicCatalogs[msg.TabName]; ok {
+			catalog.Loading = false
+			catalog.SearchQuery = msg.Query
+			if msg.Err != nil {
+				catalog.Error = msg.Err.Error()
+			} else {
+				catalog.Items = msg.Items
+				catalog.Error = ""
+				m.syncGutenbergTable(msg.TabName)
+			}
+		}
+		return m, nil
+
+	case GutenbergDownloadMsg:
+		m.ActiveDownloads--
+		if m.ActiveDownloads < 0 {
+			m.ActiveDownloads = 0
+		}
+		if catalog, ok := m.DynamicCatalogs[msg.TabName]; ok {
+			if msg.Index >= 0 && msg.Index < len(catalog.Items) {
+				if msg.Err != nil {
+					catalog.Items[msg.Index].Status = "Error: " + msg.Err.Error()
+				} else {
+					catalog.Items[msg.Index].Status = "Downloaded"
+					catalog.Items[msg.Index].Downloaded = true
+				}
+				m.syncGutenbergTable(msg.TabName)
+			}
+		}
+		return m, nil
 
 	case CheckMsg:
 		m.updateItemState(msg.Category, msg.Index, func(it *Item) {
@@ -218,9 +376,106 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if didSelect, _ := m.Filepicker.DidSelectFile(msg); didSelect {
 			m.State = stateList
 		}
+	case stateSearch:
+		m.SearchInput, cmd = m.SearchInput.Update(msg)
 	}
 
 	return m, cmd
+}
+
+// GutenbergDownloadMsg is sent when a Gutenberg book download completes
+type GutenbergDownloadMsg struct {
+	TabName string
+	Index   int
+	Err     error
+}
+
+// handleGutenbergDownload handles downloading the selected Gutenberg book
+func (m *Model) handleGutenbergDownload() (tea.Model, tea.Cmd) {
+	idx := m.Tables[m.ActiveTab].Cursor()
+	catalog, ok := m.DynamicCatalogs["Gutenberg"]
+	if !ok || idx < 0 || idx >= len(catalog.Items) {
+		return m, nil
+	}
+
+	item := &catalog.Items[idx]
+	if item.Downloaded || item.Status == "Downloading..." {
+		return m, nil
+	}
+
+	item.Status = "Downloading..."
+	m.syncGutenbergTable(m.Tabs[m.ActiveTab])
+	m.ActiveDownloads++
+
+	return m, DownloadGutenbergCmd(m.Tabs[m.ActiveTab], idx, item.Book, m.Config)
+}
+
+// DownloadGutenbergCmd downloads a Gutenberg book
+func DownloadGutenbergCmd(tabName string, index int, book core.GutenbergBook, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		url := core.GetEPUB3URL(book)
+		if url == "" {
+			return GutenbergDownloadMsg{TabName: tabName, Index: index, Err: fmt.Errorf("no EPUB format available")}
+		}
+
+		// Find settings for path and organization
+		cat := cfg.Categories[tabName]
+		organization := "by_author"
+		path := cat.Path
+		for _, src := range cat.Sources {
+			if src.Strategy == "gutenberg" {
+				if org, ok := src.Params["organization"]; ok {
+					organization = org
+				}
+				break
+			}
+		}
+
+		dest := core.GetExpectedPath(book, path, organization)
+
+		progressChan := make(chan downloader.Progress, 10)
+		go func() {
+			downloader.DownloadFile(url, dest, cfg.General.Threads, progressChan)
+		}()
+
+		// Drain progress channel (simplified - doesn't show progress bar for Gutenberg)
+		for range progressChan {
+		}
+
+		// Check if file exists after download
+		if core.CheckDownloaded(book, path, organization) {
+			return GutenbergDownloadMsg{TabName: tabName, Index: index, Err: nil}
+		}
+		return GutenbergDownloadMsg{TabName: tabName, Index: index, Err: fmt.Errorf("download failed")}
+	}
+}
+
+// syncGutenbergTable updates the Gutenberg table rows from DynamicCatalogs
+func (m *Model) syncGutenbergTable(tabName string) {
+	catalog, ok := m.DynamicCatalogs[tabName]
+	if !ok {
+		return
+	}
+
+	// Find Gutenberg tab index
+	tabIdx := -1
+	for i, tab := range m.Tabs {
+		if tab == tabName {
+			tabIdx = i
+			break
+		}
+	}
+	if tabIdx < 0 {
+		return
+	}
+
+	var rows []table.Row
+	for _, item := range catalog.Items {
+		author := core.GetPrimaryAuthor(item.Book)
+		downloads := fmt.Sprintf("%d", item.Book.DownloadCount)
+		rows = append(rows, table.Row{item.Book.Title, author, item.Status, downloads})
+	}
+	m.Tables[tabIdx].SetRows(rows)
 }
 
 func (m *Model) updateItemState(category string, index int, updateFn func(*Item)) {
