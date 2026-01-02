@@ -25,13 +25,14 @@ type GeneralConfig struct {
 	Threads     int      `yaml:"threads"` // Number of parallel download segments
 }
 
-type Storage struct {
-	DefaultRoot string `yaml:"default_root"`
-}
-
+// Category defines a group of download sources
 type Category struct {
 	Path    string   `yaml:"path"`
 	Sources []Source `yaml:"sources"`
+}
+
+type Storage struct {
+	DefaultRoot string `yaml:"default_root"`
 }
 
 type Source struct {
@@ -120,13 +121,18 @@ func EnsureConfigExists(defaultConfig []byte, catalogFS fs.FS) error {
 
 func LoadConfig(configPath string, defaultConfig []byte, catalogFS fs.FS) (*Config, error) {
 	// If configPath is empty, try to resolve it from the global directory
+	// If configPath is empty, check local then global
 	if configPath == "" {
-		dir, err := GetConfigDir()
-		if err == nil {
-			configPath = filepath.Join(dir, "config.yaml")
-		} else {
-			// Fallback to local
+		if _, err := os.Stat("config.yaml"); err == nil {
 			configPath = "config.yaml"
+		} else {
+			dir, err := GetConfigDir()
+			if err == nil {
+				configPath = filepath.Join(dir, "config.yaml")
+			} else {
+				// Fallback to local
+				configPath = "config.yaml"
+			}
 		}
 	}
 

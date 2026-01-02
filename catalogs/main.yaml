@@ -11,6 +11,13 @@
 #   {{arch_map}}      - Mapped Arch value from arch_map
 #
 sources:
+  - id: "gutenberg"
+    name: "Project Gutenberg"
+    strategy: "gutenberg"
+    params:
+      organization: "by_author" # Options: by_author, by_id, flat
+      language: "en"
+
   # --- Games ---
   - id: "melonds"
     name: "melonDS"

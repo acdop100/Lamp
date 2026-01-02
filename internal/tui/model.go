@@ -14,6 +14,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -27,6 +28,7 @@ const (
 	stateChecking
 	stateDownloading
 	stateFolderSelect
+	stateSearch // New state for search input mode
 )
 
 type Item struct {
@@ -38,6 +40,22 @@ type Item struct {
 	LocalMessage   string // Store error or info messages from checking
 	Downloaded     int64
 	Total          int64
+}
+
+// GutenbergItem represents a book in the Gutenberg tab
+type GutenbergItem struct {
+	Book       core.GutenbergBook
+	Downloaded bool
+	Status     string // "Available", "Downloaded", "Downloading..."
+}
+
+// DynamicCatalog represents an API-driven catalog (Gutenberg, future sources)
+type DynamicCatalog struct {
+	Items       []GutenbergItem // Books in this catalog
+	SearchQuery string          // Current search query (empty = default view)
+	Loading     bool            // Loading state
+	Error       string          // Error message if fetch fails
+	CatalogType string          // "gutenberg", future: "archive_org", etc.
 }
 
 func (i Item) normalizeVer(v string) string {
@@ -90,6 +108,11 @@ type Model struct {
 	DownloadQueue   []QueueItem
 	ActiveDownloads int
 	Warnings        []string
+
+	// Dynamic catalog support (Gutenberg, future sources)
+	DynamicCatalogs map[string]*DynamicCatalog // Key = tab name
+	SearchInput     textinput.Model            // Shared text input for search
+	SearchActive    bool                       // Whether search mode is active
 }
 
 func progressBar(percent float64, width int) string {
@@ -134,45 +157,104 @@ func NewModel(cfg *config.Config, warnings []string) Model {
 		{Title: "LATEST", Width: 15},
 	}
 
+	// Gutenberg-specific columns (simpler: Title, Author, Status, Downloads)
+	gutenbergColumns := []table.Column{
+		{Title: "TITLE", Width: 45},
+		{Title: "AUTHOR", Width: 25},
+		{Title: "STATUS", Width: 15},
+		{Title: "DOWNLOADS", Width: 15},
+	}
+
 	tables := make([]table.Model, len(tabs))
 	tableData := make([][]Item, len(tabs))
+	dynamicCatalogs := make(map[string]*DynamicCatalog)
 
 	for i, catName := range tabs {
 		cat := cfg.Categories[catName]
-		var rows []table.Row
-		var items []Item
+		isGutenberg := false
 		for _, src := range cat.Sources {
-			it := Item{
-				Source:      src,
-				Category:    catName,
-				LocalStatus: "Not Checked",
+			if src.Strategy == "gutenberg" {
+				isGutenberg = true
+				break
 			}
-			items = append(items, it)
-			rows = append(rows, it.ToRow())
 		}
-		tableData[i] = items
 
-		t := table.New(
-			table.WithColumns(columns),
-			table.WithRows(rows),
-			table.WithFocused(true),
-			table.WithHeight(10),
-		)
+		if isGutenberg {
+			// Initialize empty Gutenberg table (will be populated on Init)
+			t := table.New(
+				table.WithColumns(gutenbergColumns),
+				table.WithRows([]table.Row{}),
+				table.WithFocused(true),
+				table.WithHeight(10),
+			)
 
-		s := table.DefaultStyles()
-		s.Header = s.Header.
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color("240")).
-			BorderBottom(true).
-			Bold(false).
-			Foreground(lipgloss.AdaptiveColor{Light: "#A0522D", Dark: "#CD853F"})
-		s.Selected = s.Selected.
-			Foreground(lipgloss.AdaptiveColor{Light: "#2D5A27", Dark: "#78B159"}).
-			Background(lipgloss.AdaptiveColor{Light: "#E1C699", Dark: "#2D5A27"}).
-			Bold(true)
-		t.SetStyles(s)
+			s := table.DefaultStyles()
+			s.Header = s.Header.
+				BorderStyle(lipgloss.NormalBorder()).
+				BorderForeground(lipgloss.Color("240")).
+				BorderBottom(true).
+				Bold(false).
+				Foreground(lipgloss.AdaptiveColor{Light: "#A0522D", Dark: "#CD853F"})
+			s.Selected = s.Selected.
+				Foreground(lipgloss.AdaptiveColor{Light: "#2D5A27", Dark: "#78B159"}).
+				Background(lipgloss.AdaptiveColor{Light: "#E1C699", Dark: "#2D5A27"}).
+				Bold(true)
+			t.SetStyles(s)
 
-		tables[i] = t
+			tables[i] = t
+			tableData[i] = []Item{} // Empty for Gutenberg (uses DynamicCatalogs)
+
+			// Initialize dynamic catalog for Gutenberg
+			dynamicCatalogs[catName] = &DynamicCatalog{
+				Items:       []GutenbergItem{},
+				SearchQuery: "",
+				Loading:     true, // Will load on Init
+				Error:       "",
+				CatalogType: "gutenberg",
+			}
+		} else {
+			// Standard category setup
+			cat := cfg.Categories[catName]
+			var rows []table.Row
+			var items []Item
+			for _, src := range cat.Sources {
+				path := cfg.GetTargetPath(catName, src)
+				res := core.ScanLocalStatus(src, path)
+
+				it := Item{
+					Source:         src,
+					Category:       catName,
+					LocalStatus:    res.Status,
+					CurrentVersion: res.Current,
+					LatestVersion:  "---",
+				}
+				items = append(items, it)
+				rows = append(rows, it.ToRow())
+			}
+			tableData[i] = items
+
+			t := table.New(
+				table.WithColumns(columns),
+				table.WithRows(rows),
+				table.WithFocused(true),
+				table.WithHeight(10),
+			)
+
+			s := table.DefaultStyles()
+			s.Header = s.Header.
+				BorderStyle(lipgloss.NormalBorder()).
+				BorderForeground(lipgloss.Color("240")).
+				BorderBottom(true).
+				Bold(false).
+				Foreground(lipgloss.AdaptiveColor{Light: "#A0522D", Dark: "#CD853F"})
+			s.Selected = s.Selected.
+				Foreground(lipgloss.AdaptiveColor{Light: "#2D5A27", Dark: "#78B159"}).
+				Background(lipgloss.AdaptiveColor{Light: "#E1C699", Dark: "#2D5A27"}).
+				Bold(true)
+			t.SetStyles(s)
+
+			tables[i] = t
+		}
 	}
 
 	fp := filepicker.New()
@@ -180,20 +262,29 @@ func NewModel(cfg *config.Config, warnings []string) Model {
 	fp.FileAllowed = false
 	fp.CurrentDirectory, _ = os.Getwd()
 
+	// Initialize search input
+	ti := textinput.New()
+	ti.Placeholder = "Search by title or author..."
+	ti.CharLimit = 100
+	ti.Width = 40
+
 	initialState := stateList
 	if len(warnings) > 0 {
 		initialState = stateSplash
 	}
 
 	return Model{
-		Config:     cfg,
-		State:      initialState,
-		Tabs:       tabs,
-		ActiveTab:  0,
-		Tables:     tables,
-		TableData:  tableData,
-		Filepicker: fp,
-		Warnings:   warnings,
+		Config:          cfg,
+		State:           initialState,
+		Tabs:            tabs,
+		ActiveTab:       0,
+		Tables:          tables,
+		TableData:       tableData,
+		Filepicker:      fp,
+		Warnings:        warnings,
+		DynamicCatalogs: dynamicCatalogs,
+		SearchInput:     ti,
+		SearchActive:    false,
 	}
 }
 
@@ -204,20 +295,156 @@ func (m *Model) resizeTableColumns(width int) {
 		usableWidth = 40
 	}
 
-	columns := []table.Column{
-		{Title: "NAME", Width: int(float64(usableWidth) * 0.40)},
-		{Title: "STATUS", Width: int(float64(usableWidth) * 0.35)},
-		{Title: "CURRENT", Width: int(float64(usableWidth) * 0.12)},
-		{Title: "LATEST", Width: int(float64(usableWidth) * 0.12)},
-	}
-
 	for i := range m.Tables {
-		m.Tables[i].SetColumns(columns)
+		if m.Tabs[i] == "Gutenberg" {
+			gutenbergColumns := []table.Column{
+				{Title: "TITLE", Width: int(float64(usableWidth) * 0.45)},
+				{Title: "AUTHOR", Width: int(float64(usableWidth) * 0.25)},
+				{Title: "STATUS", Width: int(float64(usableWidth) * 0.15)},
+				{Title: "DOWNLOADS", Width: int(float64(usableWidth) * 0.15)},
+			}
+			m.Tables[i].SetColumns(gutenbergColumns)
+		} else {
+			columns := []table.Column{
+				{Title: "NAME", Width: int(float64(usableWidth) * 0.40)},
+				{Title: "STATUS", Width: int(float64(usableWidth) * 0.35)},
+				{Title: "CURRENT", Width: int(float64(usableWidth) * 0.12)},
+				{Title: "LATEST", Width: int(float64(usableWidth) * 0.12)},
+			}
+			m.Tables[i].SetColumns(columns)
+		}
 	}
 }
 
 func (m Model) Init() tea.Cmd {
+	// If a category contains a Gutenberg source, start fetching books
+	for name, cat := range m.Config.Categories {
+		for _, src := range cat.Sources {
+			if src.Strategy == "gutenberg" {
+				lang := src.Params["language"]
+				if lang == "" {
+					lang = "en"
+				}
+				return FetchGutenbergCmd(name, lang, m.Config)
+			}
+		}
+	}
 	return nil
+}
+
+// DynamicCatalogLoadedMsg is sent when dynamic catalog data is fetched
+type DynamicCatalogLoadedMsg struct {
+	TabName string
+	Items   []GutenbergItem
+	Err     error
+}
+
+// DynamicCatalogSearchMsg is sent when search results are fetched
+type DynamicCatalogSearchMsg struct {
+	TabName string
+	Query   string
+	Items   []GutenbergItem
+	Err     error
+}
+
+// FetchGutenbergCmd fetches top 100 books from Gutendex
+func FetchGutenbergCmd(tabName string, language string, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		books, err := core.FetchTopBooks(language, 100)
+		if err != nil {
+			return DynamicCatalogLoadedMsg{
+				TabName: tabName,
+				Items:   nil,
+				Err:     err,
+			}
+		}
+
+		// Find settings for path and organization
+		organization := "by_author"
+		path := ""
+		if cat, ok := cfg.Categories[tabName]; ok {
+			path = cat.Path
+			for _, src := range cat.Sources {
+				if src.Strategy == "gutenberg" {
+					if org, ok := src.Params["organization"]; ok {
+						organization = org
+					}
+					break
+				}
+			}
+		}
+
+		items := make([]GutenbergItem, len(books))
+		for i, book := range books {
+			downloaded := core.CheckDownloaded(book, path, organization)
+			status := "Available"
+			if downloaded {
+				status = "Downloaded"
+			}
+			items[i] = GutenbergItem{
+				Book:       book,
+				Downloaded: downloaded,
+				Status:     status,
+			}
+		}
+
+		return DynamicCatalogLoadedMsg{
+			TabName: tabName,
+			Items:   items,
+			Err:     nil,
+		}
+	}
+}
+
+// SearchGutenbergCmd searches for books matching a query
+func SearchGutenbergCmd(tabName string, query string, language string, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		books, err := core.SearchBooks(query, language)
+		if err != nil {
+			return DynamicCatalogSearchMsg{
+				TabName: tabName,
+				Query:   query,
+				Items:   nil,
+				Err:     err,
+			}
+		}
+
+		// Find settings for path and organization
+		organization := "by_author"
+		path := ""
+		if cat, ok := cfg.Categories[tabName]; ok {
+			path = cat.Path
+			for _, src := range cat.Sources {
+				if src.Strategy == "gutenberg" {
+					if org, ok := src.Params["organization"]; ok {
+						organization = org
+					}
+					break
+				}
+			}
+		}
+
+		items := make([]GutenbergItem, len(books))
+		for i, book := range books {
+			downloaded := core.CheckDownloaded(book, path, organization)
+			status := "Available"
+			if downloaded {
+				status = "Downloaded"
+			}
+			items[i] = GutenbergItem{
+				Book:       book,
+				Downloaded: downloaded,
+				Status:     status,
+			}
+		}
+
+		return DynamicCatalogSearchMsg{
+			TabName: tabName,
+			Query:   query,
+			Items:   items,
+			Err:     nil,
+		}
+	}
 }
 
 type CheckMsg struct {

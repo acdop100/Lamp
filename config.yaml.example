@@ -15,6 +15,10 @@ general:
 
 # Categories are used to group assets in the TUI
 categories:
+  Gutenberg:
+    path: "./Downloads/Gutenberg"
+    sources:
+      - id: "gutenberg"
   ISO Images:
     # Specify a custom subpath for the category
     path: "./Downloads/ISOs"

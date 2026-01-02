@@ -55,20 +55,60 @@ func (m Model) View() string {
 		// Center the content
 		return lipgloss.Place(m.Width, m.Height, lipgloss.Center, lipgloss.Center, docStyle.Render(content))
 
-	case stateList:
-		// Dynamic Download Path for active tab
+	case stateList, stateSearch:
 		catName := m.Tabs[m.ActiveTab]
-		dlPath := m.Config.Categories[catName].Path
-		if dlPath == "" {
-			dlPath = m.Config.Storage.DefaultRoot
+		cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
+		isGutenberg := false
+		for _, src := range cat.Sources {
+			if src.Strategy == "gutenberg" {
+				isGutenberg = true
+				break
+			}
 		}
 
-		// Config Header
-		configHeader := lipgloss.NewStyle().
-			Foreground(sand).
-			Width(m.Width - 4).
-			Align(lipgloss.Center).
-			Render(fmt.Sprintf("Targets: OS=%v Arch=%v | Path: %s", m.Config.General.OS, m.Config.General.Arch, dlPath))
+		// Config Header - different for Gutenberg
+		var configHeader string
+		if isGutenberg {
+			if catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]; ok {
+				cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
+				if catalog.Loading {
+					configHeader = lipgloss.NewStyle().
+						Foreground(sand).
+						Width(m.Width - 4).
+						Align(lipgloss.Center).
+						Render("Loading Project Gutenberg books...")
+				} else if catalog.Error != "" {
+					configHeader = lipgloss.NewStyle().
+						Foreground(lipgloss.Color("9")). // Red
+						Width(m.Width - 4).
+						Align(lipgloss.Center).
+						Render(fmt.Sprintf("Error loading books: %s", catalog.Error))
+				} else if catalog.SearchQuery != "" {
+					configHeader = lipgloss.NewStyle().
+						Foreground(sand).
+						Width(m.Width - 4).
+						Align(lipgloss.Center).
+						Render(fmt.Sprintf("Search results for: \"%s\" (%d books) | Path: %s", catalog.SearchQuery, len(catalog.Items), cat.Path))
+				} else {
+					configHeader = lipgloss.NewStyle().
+						Foreground(sand).
+						Width(m.Width - 4).
+						Align(lipgloss.Center).
+						Render(fmt.Sprintf("Top 100 Popular Books | Path: %s", cat.Path))
+				}
+			}
+		} else {
+			// Dynamic Download Path for active tab
+			dlPath := m.Config.Categories[catName].Path
+			if dlPath == "" {
+				dlPath = m.Config.Storage.DefaultRoot
+			}
+			configHeader = lipgloss.NewStyle().
+				Foreground(sand).
+				Width(m.Width - 4).
+				Align(lipgloss.Center).
+				Render(fmt.Sprintf("Targets: OS=%v Arch=%v | Path: %s", m.Config.General.OS, m.Config.General.Arch, dlPath))
+		}
 
 		var tabs []string
 		for i, t := range m.Tabs {
@@ -84,20 +124,57 @@ func (m Model) View() string {
 			Align(lipgloss.Center).
 			Render(lipgloss.JoinHorizontal(lipgloss.Top, tabs...))
 
+		// Search input row (only in search mode)
+		var searchRow string
+		if m.State == stateSearch {
+			searchStyle := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(forestGreen).
+				Padding(0, 1)
+			searchRow = searchStyle.Render(m.SearchInput.View())
+		}
+
 		tableView := m.Tables[m.ActiveTab].View()
 
-		footer := lipgloss.NewStyle().
-			Foreground(sand).
-			MarginTop(1).
-			Render(" h/l: tabs • d: download • shift-d: download all • u: check updates • shift-u: update all • c: open config • q: quit")
+		// Footer - different for Gutenberg
+		var footer string
+		if isGutenberg {
+			if m.State == stateSearch {
+				footer = lipgloss.NewStyle().
+					Foreground(sand).
+					MarginTop(1).
+					Render(" Enter: search • Esc: cancel • Type to search...")
+			} else {
+				footer = lipgloss.NewStyle().
+					Foreground(sand).
+					MarginTop(1).
+					Render(" h/l: tabs • /: search • d: download • Esc: back to top 100 • c: open config • q: quit")
+			}
+		} else {
+			footer = lipgloss.NewStyle().
+				Foreground(sand).
+				MarginTop(1).
+				Render(" h/l: tabs • d: download • shift-d: download all • u: check updates • shift-u: update all • c: open config • q: quit")
+		}
 
 		// Join everything into one string WITHOUT margins first
-		content := lipgloss.JoinVertical(lipgloss.Left,
-			configHeader,
-			tabRow,
-			tableView,
-			footer,
-		)
+		var content string
+		if m.State == stateSearch {
+			content = lipgloss.JoinVertical(lipgloss.Left,
+				configHeader,
+				tabRow,
+				searchRow,
+				tableView,
+				footer,
+			)
+		} else {
+			content = lipgloss.JoinVertical(lipgloss.Left,
+				configHeader,
+				tabRow,
+				tableView,
+				footer,
+			)
+		}
 
 		return docStyle.Render(content)
 
