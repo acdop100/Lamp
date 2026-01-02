@@ -95,15 +95,21 @@ func EnsureConfigExists(defaultConfig []byte, catalogFS fs.FS) error {
 	}
 
 	for _, entry := range entries {
+		// Skip directories, only process files
+		if entry.IsDir() {
+			continue
+		}
+
 		destPath := filepath.Join(catalogsDir, entry.Name())
 		if _, err := os.Stat(destPath); os.IsNotExist(err) {
-			srcPath := filepath.Join("catalogs", entry.Name())
+			srcPath := "catalogs/" + entry.Name()
 			data, err := fs.ReadFile(catalogFS, srcPath)
 			if err != nil {
+				fmt.Printf("Warning: failed to read embedded catalog %s: %v\n", entry.Name(), err)
 				continue
 			}
 			if err := os.WriteFile(destPath, data, 0644); err != nil {
-				// Log error but continue
+				fmt.Printf("Warning: failed to write catalog %s: %v\n", entry.Name(), err)
 				continue
 			}
 		}
