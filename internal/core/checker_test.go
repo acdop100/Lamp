@@ -1,10 +1,10 @@
 package core
 
 import (
+	"lamp/internal/config"
 	"os"
 	"path/filepath"
 	"testing"
-	"tui-dl/internal/config"
 )
 
 func TestCheckKiwixVersion(t *testing.T) {

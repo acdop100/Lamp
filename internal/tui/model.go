@@ -2,15 +2,15 @@ package tui
 
 import (
 	"fmt"
+	"lamp/internal/config"
+	"lamp/internal/core"
+	"lamp/internal/downloader"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"tui-dl/internal/config"
-	"tui-dl/internal/core"
-	"tui-dl/internal/downloader"
 
 	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/table"

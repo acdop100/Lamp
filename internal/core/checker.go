@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"lamp/internal/config"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"tui-dl/internal/config"
 
 	"github.com/google/go-github/v69/github"
 )
@@ -932,7 +932,7 @@ func resolveChromiumGCS(src config.Source, localPath string) CheckResult {
 
 	// Local version detection (simple file existence and metadata check if needed)
 	// We can't easily know the *revision* from the zip file name 'chrome-mac.zip' locally unless we saved a metadata file.
-	// For now, we rely on the user to update if they want to check. 
+	// For now, we rely on the user to update if they want to check.
 	// Or we could rely on checking file size/modtime from headers vs local, but that is flaky for zips.
 	// Let's assume Update behavior: if user runs verify/update, we report latest.
 	// If file exists, we report UpToDate if we want to be conservative, or Newer if we assume freq updates.
@@ -947,7 +947,7 @@ func resolveChromiumGCS(src config.Source, localPath string) CheckResult {
 	if _, err := os.Stat(fullLocalPath); err == nil {
 		return CheckResult{Status: StatusUpToDate, Current: "installed", Latest: latestRevStr, ResolvedURL: downloadURL}
 	}
-	
+
 	return CheckResult{
 		Status:      StatusNotFound,
 		Latest:      latestRevStr, // Show the revision

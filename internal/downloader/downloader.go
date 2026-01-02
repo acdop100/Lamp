@@ -53,7 +53,7 @@ func DownloadFile(url, dest string, threads int, progressChan chan<- Progress) e
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "tui-dl/1.0")
+	req.Header.Set("User-Agent", "lamp/1.0")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -112,7 +112,7 @@ func DownloadFile(url, dest string, threads int, progressChan chan<- Progress) e
 
 func downloadSingle(url, dest string, progressChan chan<- Progress) error {
 	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("User-Agent", "tui-dl/1.0")
+	req.Header.Set("User-Agent", "lamp/1.0")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -150,7 +150,7 @@ func downloadSingle(url, dest string, progressChan chan<- Progress) error {
 func downloadSegment(url string, out *os.File, start, end int64, totalDownloaded *int64, totalSize int64, progressChan chan<- Progress) error {
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
-	req.Header.Set("User-Agent", "tui-dl/1.0")
+	req.Header.Set("User-Agent", "lamp/1.0")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

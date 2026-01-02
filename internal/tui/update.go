@@ -2,8 +2,8 @@ package tui
 
 import (
 	"fmt"
-	"tui-dl/internal/config"
-	"tui-dl/internal/core"
+	"lamp/internal/config"
+	"lamp/internal/core"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -62,6 +62,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items := m.TableData[m.ActiveTab]
 			for i, it := range items {
 				if it.LocalStatus == "Local File Not Found" || it.LocalStatus == "Not Checked" {
+					it.LocalStatus = "Queued"
+					m.TableData[m.ActiveTab][i] = it
+					m.DownloadQueue = append(m.DownloadQueue, QueueItem{Category: it.Category, Index: i})
+				}
+			}
+			m.syncTableRows(m.ActiveTab)
+			return m, m.ProcessQueue()
+		case "U":
+			// Update all files with newer versions available in current tab
+			// Add to queue instead of firing immediately
+			items := m.TableData[m.ActiveTab]
+			for i, it := range items {
+				if it.LocalStatus == core.StatusNewer {
 					it.LocalStatus = "Queued"
 					m.TableData[m.ActiveTab][i] = it
 					m.DownloadQueue = append(m.DownloadQueue, QueueItem{Category: it.Category, Index: i})

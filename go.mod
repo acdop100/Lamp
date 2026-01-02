@@ -1,4 +1,4 @@
-module Lamp
+module lamp
 
 go 1.25.5
 

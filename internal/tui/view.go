@@ -89,7 +89,7 @@ func (m Model) View() string {
 		footer := lipgloss.NewStyle().
 			Foreground(sand).
 			MarginTop(1).
-			Render(" h/l: tabs • d: download • D: download all • u: check updates • c: open config • q: quit")
+			Render(" h/l: tabs • d: download • shift-d: download all • u: check updates • shift-u: update all • c: open config • q: quit")
 
 		// Join everything into one string WITHOUT margins first
 		content := lipgloss.JoinVertical(lipgloss.Left,
