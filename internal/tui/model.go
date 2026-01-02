@@ -288,6 +288,19 @@ func NewModel(cfg *config.Config, warnings []string) Model {
 	}
 }
 
+func (m Model) isGutenbergTab(tabIdx int) bool {
+	if tabIdx < 0 || tabIdx >= len(m.Tabs) {
+		return false
+	}
+	cat := m.Config.Categories[m.Tabs[tabIdx]]
+	for _, src := range cat.Sources {
+		if src.Strategy == "gutenberg" {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Model) resizeTableColumns(width int) {
 	// Account for some padding/borders
 	usableWidth := width - 10
@@ -296,7 +309,7 @@ func (m *Model) resizeTableColumns(width int) {
 	}
 
 	for i := range m.Tables {
-		if m.Tabs[i] == "Gutenberg" {
+		if m.isGutenbergTab(i) {
 			gutenbergColumns := []table.Column{
 				{Title: "TITLE", Width: int(float64(usableWidth) * 0.45)},
 				{Title: "AUTHOR", Width: int(float64(usableWidth) * 0.25)},
@@ -309,7 +322,7 @@ func (m *Model) resizeTableColumns(width int) {
 				{Title: "NAME", Width: int(float64(usableWidth) * 0.40)},
 				{Title: "STATUS", Width: int(float64(usableWidth) * 0.35)},
 				{Title: "CURRENT", Width: int(float64(usableWidth) * 0.12)},
-				{Title: "LATEST", Width: int(float64(usableWidth) * 0.12)},
+				{Title: "LATEST", Width: int(float64(usableWidth) * (0.12))},
 			}
 			m.Tables[i].SetColumns(columns)
 		}

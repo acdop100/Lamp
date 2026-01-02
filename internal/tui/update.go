@@ -113,7 +113,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "u":
 			// Trigger update check for all items in active category (not for Gutenberg)
-			if m.Tabs[m.ActiveTab] == "Gutenberg" {
+			if m.isGutenbergTab(m.ActiveTab) {
 				return m, nil
 			}
 			var cmds []tea.Cmd
@@ -125,7 +125,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		case "d":
 			// Download selected item
-			if m.Tabs[m.ActiveTab] == "Gutenberg" {
+			if m.isGutenbergTab(m.ActiveTab) {
 				return m.handleGutenbergDownload()
 			}
 			idx := m.Tables[m.ActiveTab].Cursor()
@@ -143,7 +143,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, DownloadCmd(idx, it.Category, it.Source, target, m.Config.General.GitHubToken, m.Config.General.Threads)
 		case "D":
 			// Download all missing files in current tab (not for Gutenberg)
-			if m.Tabs[m.ActiveTab] == "Gutenberg" {
+			if m.isGutenbergTab(m.ActiveTab) {
 				return m, nil
 			}
 			// Add to queue instead of firing immediately
@@ -159,7 +159,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.ProcessQueue()
 		case "U":
 			// Update all files with newer versions available in current tab (not for Gutenberg)
-			if m.Tabs[m.ActiveTab] == "Gutenberg" {
+			if m.isGutenbergTab(m.ActiveTab) {
 				return m, nil
 			}
 			// Add to queue instead of firing immediately

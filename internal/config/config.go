@@ -102,17 +102,17 @@ func EnsureConfigExists(defaultConfig []byte, catalogFS fs.FS) error {
 		}
 
 		destPath := filepath.Join(catalogsDir, entry.Name())
-		if _, err := os.Stat(destPath); os.IsNotExist(err) {
-			srcPath := "catalogs/" + entry.Name()
-			data, err := fs.ReadFile(catalogFS, srcPath)
-			if err != nil {
-				fmt.Printf("Warning: failed to read embedded catalog %s: %v\n", entry.Name(), err)
-				continue
-			}
-			if err := os.WriteFile(destPath, data, 0644); err != nil {
-				fmt.Printf("Warning: failed to write catalog %s: %v\n", entry.Name(), err)
-				continue
-			}
+		// Always overwrite default catalog files to ensure users have latest definitions
+		// Users should create new files in the catalogs directory for custom entries
+		srcPath := "catalogs/" + entry.Name()
+		data, err := fs.ReadFile(catalogFS, srcPath)
+		if err != nil {
+			fmt.Printf("Warning: failed to read embedded catalog %s: %v\n", entry.Name(), err)
+			continue
+		}
+		if err := os.WriteFile(destPath, data, 0644); err != nil {
+			fmt.Printf("Warning: failed to write catalog %s: %v\n", entry.Name(), err)
+			continue
 		}
 	}
 
