@@ -27,6 +27,7 @@ sources:
   - id: "melonds"
     name: "melonDS"
     strategy: "github_release"
+    standardize_name: true
     params:
       repo: "melonDS-emu/melonDS"
       # melonDS-1.1-appimage-x86_64.zip
@@ -51,6 +52,7 @@ sources:
   - id: "mgba"
     name: "mGBA"
     strategy: "github_release"
+    standardize_name: true
     params:
       repo: "mgba-emu/mgba"
       # mGBA-0.10.3-macos.dmg
@@ -79,6 +81,7 @@ sources:
   - id: "vlc"
     name: "VLC Media Player"
     strategy: "web_scrape"
+    standardize_name: true
     params:
       base_url: "https://get.videolan.org/vlc/"
       version_pattern: '(\d+\.\d+\.\d+)/'
@@ -102,6 +105,7 @@ sources:
   - id: "jellyfin-player"
     name: "Jellyfin Media Player"
     strategy: "github_release"
+    standardize_name: true
     params:
       repo: "jellyfin/jellyfin-media-player"
       # JellyfinMediaPlayer-1.12.0-AppleSilicon.dmg

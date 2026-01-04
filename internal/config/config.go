@@ -37,16 +37,16 @@ type Storage struct {
 }
 
 type Source struct {
-	ID       string            `yaml:"id,omitempty"`
-	Name     string            `yaml:"name,omitempty"`
-	Strategy string            `yaml:"strategy,omitempty"`
-	Params   map[string]string `yaml:"params,omitempty"`
-	OS       string            `yaml:"os,omitempty"`
-	Arch     string            `yaml:"arch,omitempty"` // Added to track specific arch of expanded source
-	Exclude  []string          `yaml:"exclude,omitempty"`
-	Checksum string            `yaml:"checksum,omitempty"` // Checksum for integrity verification (e.g. sha256:...)
-	// Deprecated: URL is now resolved dynamically, but kept for direct overrides
-	URL string `yaml:"url,omitempty"`
+	ID              string            `yaml:"id,omitempty"`
+	Name            string            `yaml:"name,omitempty"`
+	Strategy        string            `yaml:"strategy,omitempty"`
+	Params          map[string]string `yaml:"params,omitempty"`
+	OS              string            `yaml:"os,omitempty"`
+	Arch            string            `yaml:"arch,omitempty"` // Added to track specific arch of expanded source
+	Exclude         []string          `yaml:"exclude,omitempty"`
+	Checksum        string            `yaml:"checksum,omitempty"` // Checksum for integrity verification (e.g. sha256:...)
+	URL             string            `yaml:"url,omitempty"`
+	StandardizeName bool              `yaml:"standardize_name,omitempty"` // Renames downloaded file to AppName_OS_Arch_Version.ext
 
 	// Configuration Maps
 	OSMap   map[string]string `yaml:"os_map,omitempty"`
@@ -232,6 +232,9 @@ func LoadConfig(configPath string, defaultConfig []byte, catalogFS fs.FS) (*Conf
 						if src.OS != "" {
 							merged.OS = src.OS
 						}
+						if src.StandardizeName {
+							merged.StandardizeName = true
+						}
 						if len(src.Exclude) > 0 {
 							merged.Exclude = append(merged.Exclude, src.Exclude...)
 						}
@@ -360,10 +363,16 @@ func expandSources(cfg *Config) {
 
 					substituteParams(&newSrc, osName, archName)
 
+					// Determine effective arch for grouping/display
+					effectiveArch := archName
+					if override := src.Params["arch_override"]; override != "" {
+						effectiveArch = override
+					}
+
 					paramStr := fmt.Sprintf("%v", newSrc.Params)
-					// Key now includes arch to avoid merging Universal binaries into a single TUI line
-					// unless explicitly desired. This addresses the "amd64+arm64" confusion.
-					key := expandedKey{os: osName, arch: archName, params: paramStr}
+					// Key now uses effectiveArch to allow merging Universal binaries (via arch_override)
+					// while keeping separate downloads distinct.
+					key := expandedKey{os: osName, arch: effectiveArch, params: paramStr}
 
 					if _, ok := seen[key]; ok {
 						continue
@@ -517,6 +526,40 @@ func (c *Config) GetTargetPath(categoryName string, src Source) string {
 	}
 
 	return filepath.Join(basePath, filename)
+}
+
+func (s Source) GetStandardizedFilename(version, originalExt string) string {
+	// Format: AppName_OS_Arch_Version.ext
+	name := strings.ReplaceAll(s.Name, " ", "")
+	// Clean brackets and extra info
+	if idx := strings.Index(name, "["); idx != -1 {
+		name = name[:idx]
+	}
+	name = strings.Trim(name, "_- ")
+
+	osName := s.OS
+	if osName == "" {
+		osName = runtime.GOOS
+	}
+
+	archName := s.Arch
+	if archName == "" {
+		archName = runtime.GOARCH
+	}
+
+	ext := originalExt
+	if ext == "" {
+		ext = "bin"
+	} else {
+		ext = strings.TrimPrefix(ext, ".")
+	}
+
+	ver := strings.Trim(version, "-_ .")
+	if ver == "" {
+		ver = "latest"
+	}
+
+	return fmt.Sprintf("%s_%s_%s_%s.%s", name, osName, archName, ver, ext)
 }
 
 func loadEnv() {

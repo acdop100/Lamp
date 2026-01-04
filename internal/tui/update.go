@@ -141,7 +141,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncTableRows(m.ActiveTab)
 
 			m.ActiveDownloads++ // Manual download counts towards concurrency
-			return m, DownloadCmd(idx, it.Category, it.Source, target, m.Config.General.GitHubToken, m.Config.General.Threads)
+			version := it.LatestVersion
+			if version == "" || version == "---" {
+				version = it.CurrentVersion
+			}
+			return m, DownloadCmd(idx, it.Category, it.Source, target, version, m.Config.General.GitHubToken, m.Config.General.Threads)
 		case "D":
 			// Download all missing files in current tab (not for dynamic catalogs)
 			if m.isDynamicTab(m.ActiveTab) {

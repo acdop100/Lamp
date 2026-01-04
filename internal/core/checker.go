@@ -155,6 +155,30 @@ func ScanLocalStatus(src config.Source, localPath string) CheckResult {
 		patterns = append(patterns, "^"+base+"$")
 	}
 
+	// 5. Standardized Name Pattern
+	if src.StandardizeName {
+		// AppName_OS_Arch_Version.ext
+		name := strings.ReplaceAll(src.Name, " ", "")
+		if idx := strings.Index(name, "["); idx != -1 {
+			name = name[:idx]
+		}
+		name = strings.Trim(name, "_- ")
+
+		osName := src.OS
+		if osName == "" {
+			osName = ".*" // Match any OS if not specific
+		}
+		archName := src.Arch
+		if archName == "" {
+			archName = ".*"
+		}
+
+		// Pattern: AppName_OS_Arch_Version.ext
+		// We use (.*?) for version
+		pat := fmt.Sprintf("^%s_%s_%s_(.*?)\\..*$", regexp.QuoteMeta(name), osName, archName)
+		patterns = append(patterns, pat)
+	}
+
 	// Helper to scan with specific patterns
 	scanWithPatterns := func(regexStrs []string) CheckResult {
 		for _, pat := range regexStrs {
@@ -185,7 +209,7 @@ func ScanLocalStatus(src config.Source, localPath string) CheckResult {
 					if len(m) > 1 {
 						version = m[1]
 						version = strings.TrimPrefix(version, "v")
-						version = strings.Trim(version, "-_ ")
+						version = strings.Trim(version, "-_ .")
 					}
 					return CheckResult{Status: StatusDownloaded, Current: version}
 				}
@@ -464,7 +488,7 @@ func resolveWebScrape(src config.Source, localPath string) CheckResult {
 		if reFile.MatchString(entry.Name()) {
 			m := reFile.FindStringSubmatch(entry.Name())
 			if len(m) > 1 {
-				currentVersion = m[1]
+				currentVersion = strings.Trim(m[1], "-_ .")
 			}
 			break
 		}
@@ -762,7 +786,7 @@ func resolveRSSFeed(src config.Source, localPath string) CheckResult {
 		if !entry.IsDir() && reItem.MatchString(entry.Name()) {
 			m := reVersion.FindStringSubmatch(entry.Name())
 			if len(m) > 1 {
-				currentVersion = m[1]
+				currentVersion = strings.Trim(m[1], "-_ .")
 				break
 			}
 		}
@@ -817,7 +841,7 @@ func resolveHTTPRedirect(src config.Source, localPath string) CheckResult {
 		reVer := regexp.MustCompile(versionPattern)
 		m := reVer.FindStringSubmatch(resolvedURL)
 		if len(m) > 1 {
-			latestVersion = m[1]
+			latestVersion = strings.Trim(m[1], "-_ .")
 		}
 	} else {
 		latestVersion = "latest"

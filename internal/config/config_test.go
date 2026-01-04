@@ -156,3 +156,56 @@ func TestExpandSourcesWithMaps(t *testing.T) {
 		t.Error("Did not find correct Windows AMD64 expansion")
 	}
 }
+
+func TestGetStandardizedFilename(t *testing.T) {
+	tests := []struct {
+		name     string
+		source   Source
+		version  string
+		ext      string
+		expected string
+	}{
+		{
+			name: "Basic",
+			source: Source{
+				Name: "Chromium",
+				OS:   "windows",
+				Arch: "amd64",
+			},
+			version:  "120.0.6099.109",
+			ext:      ".zip",
+			expected: "Chromium_windows_amd64_120.0.6099.109.zip",
+		},
+		{
+			name: "Name with spaces and brackets",
+			source: Source{
+				Name: "Mozilla Firefox [win64]",
+				OS:   "windows",
+				Arch: "amd64",
+			},
+			version:  "121.0",
+			ext:      "exe",
+			expected: "MozillaFirefox_windows_amd64_121.0.exe",
+		},
+		{
+			name: "Empty version",
+			source: Source{
+				Name: "TestApp",
+				OS:   "linux",
+				Arch: "arm64",
+			},
+			version:  "",
+			ext:      ".tar.gz",
+			expected: "TestApp_linux_arm64_latest.tar.gz",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.source.GetStandardizedFilename(tt.version, tt.ext)
+			if got != tt.expected {
+				t.Errorf("GetStandardizedFilename() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}

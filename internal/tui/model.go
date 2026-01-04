@@ -7,7 +7,9 @@ import (
 	"lamp/internal/downloader"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -692,20 +694,20 @@ type ProgressUpdateMsg struct {
 	ProgressChan chan downloader.Progress
 }
 
-func DownloadCmdBatch(index int, category, url, dest string, threads int, progressChan chan downloader.Progress) tea.Cmd {
+func DownloadCmdBatch(index int, category, downloadURL, dest string, threads int, progressChan chan downloader.Progress) tea.Cmd {
 	return func() tea.Msg {
-		err := downloader.DownloadFile(url, dest, threads, progressChan)
+		err := downloader.DownloadFile(downloadURL, dest, threads, progressChan)
 		return DownloadMsg{Category: category, Index: index, Err: err}
 	}
 }
 
-func DownloadCmd(index int, category string, src config.Source, dest string, githubToken string, threads int) tea.Cmd {
+func DownloadCmd(index int, category string, src config.Source, dest string, version string, githubToken string, threads int) tea.Cmd {
 	return func() tea.Msg {
 		progressChan := make(chan downloader.Progress, 10)
 
 		go func() {
-			url := src.URL
-			if url == "" {
+			downloadURL := src.URL
+			if downloadURL == "" {
 				// 0. Auto-resolve
 				progressChan <- downloader.Progress{Downloaded: 0, Total: -2} // Special indicator for "Resolving..."
 				res := core.CheckVersion(src, dest, githubToken)
@@ -714,10 +716,10 @@ func DownloadCmd(index int, category string, src config.Source, dest string, git
 					close(progressChan)
 					return
 				}
-				url = res.ResolvedURL
-				// Recalculate dest if it was missing an extension (because URL was empty)
-				if filepath.Base(dest) == src.Name || strings.Contains(filepath.Base(dest), "[") {
-					dest = filepath.Join(filepath.Dir(dest), filepath.Base(url))
+				downloadURL = res.ResolvedURL
+				// Use resolved version if version was empty
+				if version == "" {
+					version = res.Latest
 				}
 				// Feedback the resolved info to TUI
 				progressChan <- downloader.Progress{
@@ -730,11 +732,29 @@ func DownloadCmd(index int, category string, src config.Source, dest string, git
 				}
 			}
 
+			// Apply Standardization if requested
+			if src.StandardizeName {
+				// Use path.Ext for URL to handle forward slashes correctly on all platforms
+				ext := ""
+				if u, err := url.Parse(downloadURL); err == nil {
+					ext = path.Ext(u.Path)
+				} else {
+					ext = filepath.Ext(downloadURL)
+				}
+
+				newName := src.GetStandardizedFilename(version, ext)
+				// Ensure we are in the right directory (category path)
+				dest = filepath.Join(filepath.Dir(dest), newName)
+			} else if downloadURL != "" && (filepath.Base(dest) == src.Name || strings.Contains(filepath.Base(dest), "[")) {
+				// Fallback generic name fix
+				dest = filepath.Join(filepath.Dir(dest), filepath.Base(downloadURL))
+			}
+
 			// 1. Log space check
 			progressChan <- downloader.Progress{Downloaded: 0, Total: -1} // Custom indicator for "Checking space"
 
 			// 2. Perform HEAD to get size
-			resp, err := http.Head(url)
+			resp, err := http.Head(downloadURL)
 			if err != nil {
 				// Not fatal, we'll try to download anyway or it will fail later
 			} else {
@@ -755,7 +775,7 @@ func DownloadCmd(index int, category string, src config.Source, dest string, git
 				}
 			}
 
-			downloader.DownloadFile(url, dest, threads, progressChan)
+			downloader.DownloadFile(downloadURL, dest, threads, progressChan)
 		}()
 
 		return StartDownloadMsg{
@@ -819,12 +839,16 @@ func (m *Model) ProcessQueue() tea.Cmd {
 		if found {
 			target := m.Config.GetTargetPath(item.Category, src)
 
-			// Update status to "Starting..." if not already
+			var version string
 			m.updateItemState(item.Category, item.Index, func(it *Item) {
 				it.LocalStatus = "Starting download..."
+				version = it.LatestVersion
+				if version == "" || version == "---" {
+					version = it.CurrentVersion
+				}
 			})
 
-			cmds = append(cmds, DownloadCmd(item.Index, item.Category, src, target, m.Config.General.GitHubToken, m.Config.General.Threads))
+			cmds = append(cmds, DownloadCmd(item.Index, item.Category, src, target, version, m.Config.General.GitHubToken, m.Config.General.Threads))
 		} else {
 			m.ActiveDownloads-- // Should not happen, but safety decrement
 		}
