@@ -49,13 +49,22 @@ type GutenbergItem struct {
 	Status     string // "Available", "Downloaded", "Downloading..."
 }
 
-// DynamicCatalog represents an API-driven catalog (Gutenberg, future sources)
+// KiwixItem represents a ZIM file in the Kiwix tab
+type KiwixItem struct {
+	Entry      core.KiwixEntry
+	Downloaded bool
+	Status     string // "Available", "Downloaded", "Downloading..."
+}
+
+// DynamicCatalog represents an API-driven catalog (Gutenberg, Kiwix)
 type DynamicCatalog struct {
-	Items       []GutenbergItem // Books in this catalog
-	SearchQuery string          // Current search query (empty = default view)
-	Loading     bool            // Loading state
-	Error       string          // Error message if fetch fails
-	CatalogType string          // "gutenberg", future: "archive_org", etc.
+	GutenbergItems []GutenbergItem // Books for Gutenberg catalog
+	KiwixItems     []KiwixItem     // ZIM files for Kiwix catalog
+	SearchQuery    string          // Current search query (empty = default view)
+	Loading        bool            // Loading state
+	Error          string          // Error message if fetch fails
+	CatalogType    string          // "gutenberg", "kiwix"
+	Category       string          // For Kiwix: selected category filter
 }
 
 func (i Item) normalizeVer(v string) string {
@@ -171,15 +180,18 @@ func NewModel(cfg *config.Config, warnings []string) Model {
 
 	for i, catName := range tabs {
 		cat := cfg.Categories[catName]
-		isGutenberg := false
+		catalogType := ""
 		for _, src := range cat.Sources {
 			if src.Strategy == "gutenberg" {
-				isGutenberg = true
+				catalogType = "gutenberg"
+				break
+			} else if src.Strategy == "kiwix" {
+				catalogType = "kiwix"
 				break
 			}
 		}
 
-		if isGutenberg {
+		if catalogType == "gutenberg" {
 			// Initialize empty Gutenberg table (will be populated on Init)
 			t := table.New(
 				table.WithColumns(gutenbergColumns),
@@ -206,11 +218,52 @@ func NewModel(cfg *config.Config, warnings []string) Model {
 
 			// Initialize dynamic catalog for Gutenberg
 			dynamicCatalogs[catName] = &DynamicCatalog{
-				Items:       []GutenbergItem{},
+				GutenbergItems: []GutenbergItem{},
+				SearchQuery:    "",
+				Loading:        true, // Will load on Init
+				Error:          "",
+				CatalogType:    "gutenberg",
+			}
+		} else if catalogType == "kiwix" {
+			// Initialize empty Kiwix table (will be populated on Init)
+			kiwixColumns := []table.Column{
+				{Title: "NAME", Width: 35},
+				{Title: "SUMMARY", Width: 40},
+				{Title: "LANGUAGE", Width: 10},
+				{Title: "SIZE", Width: 12},
+				{Title: "DATE", Width: 10},
+				{Title: "STATUS", Width: 15},
+			}
+			t := table.New(
+				table.WithColumns(kiwixColumns),
+				table.WithRows([]table.Row{}),
+				table.WithFocused(true),
+				table.WithHeight(10),
+			)
+
+			s := table.DefaultStyles()
+			s.Header = s.Header.
+				BorderStyle(lipgloss.NormalBorder()).
+				BorderForeground(lipgloss.Color("240")).
+				BorderBottom(true).
+				Bold(false).
+				Foreground(lipgloss.AdaptiveColor{Light: "#A0522D", Dark: "#CD853F"})
+			s.Selected = s.Selected.
+				Foreground(lipgloss.AdaptiveColor{Light: "#2D5A27", Dark: "#78B159"}).
+				Background(lipgloss.AdaptiveColor{Light: "#E1C699", Dark: "#2D5A27"}).
+				Bold(true)
+			t.SetStyles(s)
+
+			tables[i] = t
+			tableData[i] = []Item{} // Empty for Kiwix (uses DynamicCatalogs)
+
+			// Initialize dynamic catalog for Kiwix
+			dynamicCatalogs[catName] = &DynamicCatalog{
+				KiwixItems:  []KiwixItem{},
 				SearchQuery: "",
 				Loading:     true, // Will load on Init
 				Error:       "",
-				CatalogType: "gutenberg",
+				CatalogType: "kiwix",
 			}
 		} else {
 			// Standard category setup
@@ -288,17 +341,44 @@ func NewModel(cfg *config.Config, warnings []string) Model {
 	}
 }
 
-func (m Model) isGutenbergTab(tabIdx int) bool {
+// isDynamicTab returns true if the tab uses a dynamic catalog (Gutenberg or Kiwix)
+func (m Model) isDynamicTab(tabIdx int) bool {
 	if tabIdx < 0 || tabIdx >= len(m.Tabs) {
 		return false
 	}
 	cat := m.Config.Categories[m.Tabs[tabIdx]]
 	for _, src := range cat.Sources {
-		if src.Strategy == "gutenberg" {
+		if src.Strategy == "gutenberg" || src.Strategy == "kiwix" {
 			return true
 		}
 	}
 	return false
+}
+
+// getCatalogType returns the catalog type for the given tab index
+func (m Model) getCatalogType(tabIdx int) string {
+	if tabIdx < 0 || tabIdx >= len(m.Tabs) {
+		return ""
+	}
+	cat := m.Config.Categories[m.Tabs[tabIdx]]
+	for _, src := range cat.Sources {
+		if src.Strategy == "gutenberg" {
+			return "gutenberg"
+		} else if src.Strategy == "kiwix" {
+			return "kiwix"
+		}
+	}
+	return ""
+}
+
+// isGutenbergTab returns true if the tab is a Gutenberg catalog (for backward compatibility)
+func (m Model) isGutenbergTab(tabIdx int) bool {
+	return m.getCatalogType(tabIdx) == "gutenberg"
+}
+
+// isKiwixTab returns true if the tab is a Kiwix catalog
+func (m Model) isKiwixTab(tabIdx int) bool {
+	return m.getCatalogType(tabIdx) == "kiwix"
 }
 
 func (m *Model) resizeTableColumns(width int) {
@@ -317,6 +397,16 @@ func (m *Model) resizeTableColumns(width int) {
 				{Title: "DOWNLOADS", Width: int(float64(usableWidth) * 0.15)},
 			}
 			m.Tables[i].SetColumns(gutenbergColumns)
+		} else if m.isKiwixTab(i) {
+			kiwixColumns := []table.Column{
+				{Title: "NAME", Width: int(float64(usableWidth) * 0.25)},
+				{Title: "SUMMARY", Width: int(float64(usableWidth) * 0.35)},
+				{Title: "LANGUAGE", Width: int(float64(usableWidth) * 0.08)},
+				{Title: "SIZE", Width: int(float64(usableWidth) * 0.10)},
+				{Title: "DATE", Width: int(float64(usableWidth) * 0.08)},
+				{Title: "STATUS", Width: int(float64(usableWidth) * 0.14)},
+			}
+			m.Tables[i].SetColumns(kiwixColumns)
 		} else {
 			columns := []table.Column{
 				{Title: "NAME", Width: int(float64(usableWidth) * 0.40)},
@@ -330,17 +420,30 @@ func (m *Model) resizeTableColumns(width int) {
 }
 
 func (m Model) Init() tea.Cmd {
-	// If a category contains a Gutenberg source, start fetching books
+	var cmds []tea.Cmd
+	// Start fetching for all dynamic catalogs
 	for name, cat := range m.Config.Categories {
 		for _, src := range cat.Sources {
 			if src.Strategy == "gutenberg" {
-				lang := src.Params["language"]
+				lang := cat.Language
 				if lang == "" {
 					lang = "en"
 				}
-				return FetchGutenbergCmd(name, lang, m.Config)
+				cmds = append(cmds, FetchGutenbergCmd(name, lang, m.Config))
+				break
+			} else if src.Strategy == "kiwix" {
+				lang := cat.Language
+				if lang == "" {
+					lang = "eng"
+				}
+				category := src.Params["category"]
+				cmds = append(cmds, FetchKiwixCmd(name, lang, category, m.Config))
+				break
 			}
 		}
+	}
+	if len(cmds) > 0 {
+		return tea.Batch(cmds...)
 	}
 	return nil
 }
@@ -452,6 +555,103 @@ func SearchGutenbergCmd(tabName string, query string, language string, cfg *conf
 		}
 
 		return DynamicCatalogSearchMsg{
+			TabName: tabName,
+			Query:   query,
+			Items:   items,
+			Err:     nil,
+		}
+	}
+}
+
+// KiwixCatalogLoadedMsg is sent when Kiwix catalog data is fetched
+type KiwixCatalogLoadedMsg struct {
+	TabName string
+	Items   []KiwixItem
+	Err     error
+}
+
+// KiwixCatalogSearchMsg is sent when Kiwix search results are fetched
+type KiwixCatalogSearchMsg struct {
+	TabName string
+	Query   string
+	Items   []KiwixItem
+	Err     error
+}
+
+// FetchKiwixCmd fetches entries from the Kiwix library
+func FetchKiwixCmd(tabName string, language string, category string, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		entries, err := core.FetchKiwixEntries(language, category, 100)
+		if err != nil {
+			return KiwixCatalogLoadedMsg{
+				TabName: tabName,
+				Items:   nil,
+				Err:     err,
+			}
+		}
+
+		// Find settings for path
+		path := ""
+		if cat, ok := cfg.Categories[tabName]; ok {
+			path = cat.Path
+		}
+
+		items := make([]KiwixItem, len(entries))
+		for i, entry := range entries {
+			downloaded := core.CheckKiwixDownloaded(entry, path)
+			status := "Available"
+			if downloaded {
+				status = "Downloaded"
+			}
+			items[i] = KiwixItem{
+				Entry:      entry,
+				Downloaded: downloaded,
+				Status:     status,
+			}
+		}
+
+		return KiwixCatalogLoadedMsg{
+			TabName: tabName,
+			Items:   items,
+			Err:     nil,
+		}
+	}
+}
+
+// SearchKiwixCmd searches for entries matching a query
+func SearchKiwixCmd(tabName string, query string, language string, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		entries, err := core.SearchKiwixEntries(query, language, 100)
+		if err != nil {
+			return KiwixCatalogSearchMsg{
+				TabName: tabName,
+				Query:   query,
+				Items:   nil,
+				Err:     err,
+			}
+		}
+
+		// Find settings for path
+		path := ""
+		if cat, ok := cfg.Categories[tabName]; ok {
+			path = cat.Path
+		}
+
+		items := make([]KiwixItem, len(entries))
+		for i, entry := range entries {
+			downloaded := core.CheckKiwixDownloaded(entry, path)
+			status := "Available"
+			if downloaded {
+				status = "Downloaded"
+			}
+			items[i] = KiwixItem{
+				Entry:      entry,
+				Downloaded: downloaded,
+				Status:     status,
+			}
+		}
+
+		return KiwixCatalogSearchMsg{
 			TabName: tabName,
 			Query:   query,
 			Items:   items,

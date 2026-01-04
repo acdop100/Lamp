@@ -27,8 +27,9 @@ type GeneralConfig struct {
 
 // Category defines a group of download sources
 type Category struct {
-	Path    string   `yaml:"path"`
-	Sources []Source `yaml:"sources"`
+	Path     string   `yaml:"path"`
+	Language string   `yaml:"language,omitempty"` // Default language for dynamic catalogs in this category
+	Sources  []Source `yaml:"sources"`
 }
 
 type Storage struct {

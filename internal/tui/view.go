@@ -58,47 +58,56 @@ func (m Model) View() string {
 	case stateList, stateSearch:
 		catName := m.Tabs[m.ActiveTab]
 		cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
-		isGutenberg := false
-		for _, src := range cat.Sources {
-			if src.Strategy == "gutenberg" {
-				isGutenberg = true
-				break
-			}
-		}
+		catalogType := m.getCatalogType(m.ActiveTab)
 
-		// Config Header - different for Gutenberg
+		// Config Header - different for dynamic catalogs
 		var configHeader string
-		if isGutenberg {
-			if catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]; ok {
-				cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
-				if catalog.Loading {
-					configHeader = lipgloss.NewStyle().
-						Foreground(sand).
-						Width(m.Width - 4).
-						Align(lipgloss.Center).
-						Render("Loading Project Gutenberg books...")
-				} else if catalog.Error != "" {
-					configHeader = lipgloss.NewStyle().
-						Foreground(lipgloss.Color("9")). // Red
-						Width(m.Width - 4).
-						Align(lipgloss.Center).
-						Render(fmt.Sprintf("Error loading books: %s", catalog.Error))
-				} else if catalog.SearchQuery != "" {
-					configHeader = lipgloss.NewStyle().
-						Foreground(sand).
-						Width(m.Width - 4).
-						Align(lipgloss.Center).
-						Render(fmt.Sprintf("Search results for: \"%s\" (%d books) | Path: %s", catalog.SearchQuery, len(catalog.Items), cat.Path))
-				} else {
-					configHeader = lipgloss.NewStyle().
-						Foreground(sand).
-						Width(m.Width - 4).
-						Align(lipgloss.Center).
-						Render(fmt.Sprintf("Top 100 Popular Books | Path: %s", cat.Path))
+		if catalog, ok := m.DynamicCatalogs[catName]; ok && catalogType != "" {
+			if catalog.Loading {
+				loadingText := "Loading catalog..."
+				if catalogType == "gutenberg" {
+					loadingText = "Loading Project Gutenberg books..."
+				} else if catalogType == "kiwix" {
+					loadingText = "Loading Kiwix library..."
 				}
+				configHeader = lipgloss.NewStyle().
+					Foreground(sand).
+					Width(m.Width - 4).
+					Align(lipgloss.Center).
+					Render(loadingText)
+			} else if catalog.Error != "" {
+				configHeader = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("9")). // Red
+					Width(m.Width - 4).
+					Align(lipgloss.Center).
+					Render(fmt.Sprintf("Error loading: %s", catalog.Error))
+			} else if catalog.SearchQuery != "" {
+				itemCount := 0
+				if catalogType == "gutenberg" {
+					itemCount = len(catalog.GutenbergItems)
+				} else if catalogType == "kiwix" {
+					itemCount = len(catalog.KiwixItems)
+				}
+				configHeader = lipgloss.NewStyle().
+					Foreground(sand).
+					Width(m.Width - 4).
+					Align(lipgloss.Center).
+					Render(fmt.Sprintf("Search results for: \"%s\" (%d items) | Path: %s", catalog.SearchQuery, itemCount, cat.Path))
+			} else {
+				defaultText := "Catalog | Path: " + cat.Path
+				if catalogType == "gutenberg" {
+					defaultText = "Top 100 Popular Books | Path: " + cat.Path
+				} else if catalogType == "kiwix" {
+					defaultText = fmt.Sprintf("Kiwix Library (%d ZIMs) | Path: %s", len(catalog.KiwixItems), cat.Path)
+				}
+				configHeader = lipgloss.NewStyle().
+					Foreground(sand).
+					Width(m.Width - 4).
+					Align(lipgloss.Center).
+					Render(defaultText)
 			}
 		} else {
-			// Dynamic Download Path for active tab
+			// Standard category (non-dynamic)
 			dlPath := m.Config.Categories[catName].Path
 			if dlPath == "" {
 				dlPath = m.Config.Storage.DefaultRoot
@@ -136,25 +145,25 @@ func (m Model) View() string {
 
 		tableView := m.Tables[m.ActiveTab].View()
 
-		// Footer - different for Gutenberg
+		// Footer - different for dynamic catalogs
 		var footer string
-		if isGutenberg {
+		if m.isDynamicTab(m.ActiveTab) {
 			if m.State == stateSearch {
 				footer = lipgloss.NewStyle().
 					Foreground(sand).
 					MarginTop(1).
-					Render(" Enter: search • Esc: cancel • Type to search...")
+					Render(" Enter: search | Esc: cancel | Type to search...")
 			} else {
 				footer = lipgloss.NewStyle().
 					Foreground(sand).
 					MarginTop(1).
-					Render(" h/l: tabs • /: search • d: download • Esc: back to top 100 • c: open config • q: quit")
+					Render(" h/l: tabs | /: search | d: download | Esc: back to list | c: open config | q: quit")
 			}
 		} else {
 			footer = lipgloss.NewStyle().
 				Foreground(sand).
 				MarginTop(1).
-				Render(" h/l: tabs • d: download • shift-d: download all • u: check updates • shift-u: update all • c: open config • q: quit")
+				Render(" h/l: tabs | d: download | shift-d: download all | u: check updates | shift-u: update all | c: open config | q: quit")
 		}
 
 		// Join everything into one string WITHOUT margins first

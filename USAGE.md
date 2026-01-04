@@ -15,7 +15,7 @@ This guide covers the usage, configuration, and extensibility of LAMP.
       - [Exclude](#exclude)
     - [Strategies](#strategies)
     - [Variable Expansion](#variable-expansion)
-  - [Project Gutenberg](#project-gutenberg)
+  - [Project Gutenberg \& Kiwix Library](#project-gutenberg--kiwix-library)
 
 ## TUI Controls
 
@@ -169,9 +169,9 @@ You can use the following variables in `params` to dynamically generate URLs for
 - `{{arch_map}}`: Value mapped from `arch_map` section.
 - `{{ext}}`: Value mapped from `ext_map` section.
 
-## Project Gutenberg
+## Project Gutenberg & Kiwix Library
 
-The `Gutenberg` tab allows you to browse and download public domain ebooks if enabled in your config.yaml. By default, it loads the Top 100 most popular books. Users can search for books using the `/` or `s` key and press enter to download the `EPUB3` file. Books are saved to the configured path, organized by Author or ID based on your catalog settings.
+The `Gutenberg` and `Kiwix Library` tabs allow you to browse and download public domain ebooks and ZIM files if enabled in your config.yaml. By default, it loads the Top 100 most popular books and first 100 ZIM files from the main catalog. Users can search for books using the `/` or `s` key and press enter to download the `EPUB3` file or `ZIM` file formats respectively. Files are saved to the configured path, with books organized by Author or ID based on your catalog settings and ZIM files organized by Category if available.
 
 Project Gutenberg default UI:
 ![LAMP UI](assets/PG_top100.png)

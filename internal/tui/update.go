@@ -31,52 +31,58 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.State = stateList
 				m.SearchActive = false
 				m.SearchInput.Reset()
-				cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
-				var lang string
-				isGutenberg := false
-				for _, src := range cat.Sources {
-					if src.Strategy == "gutenberg" {
-						isGutenberg = true
-						lang = src.Params["language"]
+				catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]
+				if ok {
+					catalog.Loading = true
+					catalog.SearchQuery = ""
+					if catalog.CatalogType == "gutenberg" {
+						cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
+						lang := cat.Language
 						if lang == "" {
 							lang = "en"
 						}
-						break
+						return m, FetchGutenbergCmd(m.Tabs[m.ActiveTab], lang, m.Config)
+					} else if catalog.CatalogType == "kiwix" {
+						cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
+						lang := cat.Language
+						if lang == "" {
+							lang = "eng"
+						}
+						category := ""
+						for _, src := range cat.Sources {
+							if src.Strategy == "kiwix" {
+								category = src.Params["category"]
+								break
+							}
+						}
+						return m, FetchKiwixCmd(m.Tabs[m.ActiveTab], lang, category, m.Config)
 					}
-				}
-				if isGutenberg {
-					if catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]; ok {
-						catalog.Loading = true
-						catalog.SearchQuery = ""
-					}
-					return m, FetchGutenbergCmd(m.Tabs[m.ActiveTab], lang, m.Config)
 				}
 				return m, nil
 			case "enter":
 				query := m.SearchInput.Value()
 				if query != "" {
-					cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
-					var lang string
-					isGutenberg := false
-					for _, src := range cat.Sources {
-						if src.Strategy == "gutenberg" {
-							isGutenberg = true
-							lang = src.Params["language"]
+					catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]
+					if ok {
+						m.State = stateList
+						m.SearchActive = false
+						catalog.Loading = true
+						catalog.SearchQuery = query
+						if catalog.CatalogType == "gutenberg" {
+							cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
+							lang := cat.Language
 							if lang == "" {
 								lang = "en"
 							}
-							break
+							return m, SearchGutenbergCmd(m.Tabs[m.ActiveTab], query, lang, m.Config)
+						} else if catalog.CatalogType == "kiwix" {
+							cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
+							lang := cat.Language
+							if lang == "" {
+								lang = "eng"
+							}
+							return m, SearchKiwixCmd(m.Tabs[m.ActiveTab], query, lang, m.Config)
 						}
-					}
-
-					if isGutenberg {
-						m.State = stateList
-						m.SearchActive = false
-						if catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]; ok {
-							catalog.Loading = true
-							catalog.SearchQuery = query
-						}
-						return m, SearchGutenbergCmd(m.Tabs[m.ActiveTab], query, lang, m.Config)
 					}
 				}
 				return m, nil
@@ -96,24 +102,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ActiveTab = (m.ActiveTab - 1 + len(m.Tabs)) % len(m.Tabs)
 			return m, nil
 		case "/", "s":
-			// Enter search mode (only for dynamic catalogs like Gutenberg)
-			cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
-			isGutenberg := false
-			for _, src := range cat.Sources {
-				if src.Strategy == "gutenberg" {
-					isGutenberg = true
-					break
-				}
-			}
-			if isGutenberg {
+			// Enter search mode (only for dynamic catalogs like Gutenberg or Kiwix)
+			if m.isDynamicTab(m.ActiveTab) {
 				m.State = stateSearch
 				m.SearchActive = true
 				m.SearchInput.Focus()
 				return m, nil
 			}
 		case "u":
-			// Trigger update check for all items in active category (not for Gutenberg)
-			if m.isGutenbergTab(m.ActiveTab) {
+			// Trigger update check for all items in active category (not for dynamic catalogs)
+			if m.isDynamicTab(m.ActiveTab) {
 				return m, nil
 			}
 			var cmds []tea.Cmd
@@ -127,6 +125,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Download selected item
 			if m.isGutenbergTab(m.ActiveTab) {
 				return m.handleGutenbergDownload()
+			}
+			if m.isKiwixTab(m.ActiveTab) {
+				return m.handleKiwixDownload()
 			}
 			idx := m.Tables[m.ActiveTab].Cursor()
 			if idx < 0 || idx >= len(m.TableData[m.ActiveTab]) {
@@ -142,8 +143,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ActiveDownloads++ // Manual download counts towards concurrency
 			return m, DownloadCmd(idx, it.Category, it.Source, target, m.Config.General.GitHubToken, m.Config.General.Threads)
 		case "D":
-			// Download all missing files in current tab (not for Gutenberg)
-			if m.isGutenbergTab(m.ActiveTab) {
+			// Download all missing files in current tab (not for dynamic catalogs)
+			if m.isDynamicTab(m.ActiveTab) {
 				return m, nil
 			}
 			// Add to queue instead of firing immediately
@@ -158,8 +159,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncTableRows(m.ActiveTab)
 			return m, m.ProcessQueue()
 		case "U":
-			// Update all files with newer versions available in current tab (not for Gutenberg)
-			if m.isGutenbergTab(m.ActiveTab) {
+			// Update all files with newer versions available in current tab (not for dynamic catalogs)
+			if m.isDynamicTab(m.ActiveTab) {
 				return m, nil
 			}
 			// Add to queue instead of firing immediately
@@ -187,25 +188,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.State = stateList
 				return m, nil
 			}
-			// Reset Gutenberg results to Top 100 if searching
-			cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
-			isGutenberg := false
-			var lang string
-			for _, src := range cat.Sources {
-				if src.Strategy == "gutenberg" {
-					isGutenberg = true
-					lang = src.Params["language"]
-					if lang == "" {
-						lang = "en"
-					}
-					break
-				}
-			}
-			if isGutenberg {
+			// Reset dynamic catalogs if searching
+			if m.isDynamicTab(m.ActiveTab) {
 				if catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]; ok && catalog.SearchQuery != "" {
 					catalog.Loading = true
 					catalog.SearchQuery = ""
-					return m, FetchGutenbergCmd(m.Tabs[m.ActiveTab], lang, m.Config)
+					catalogType := m.getCatalogType(m.ActiveTab)
+					cat := m.Config.Categories[m.Tabs[m.ActiveTab]]
+
+					if catalogType == "gutenberg" {
+						lang := cat.Language
+						if lang == "" {
+							lang = "en"
+						}
+						return m, FetchGutenbergCmd(m.Tabs[m.ActiveTab], lang, m.Config)
+					} else if catalogType == "kiwix" {
+						lang := cat.Language
+						if lang == "" {
+							lang = "eng"
+						}
+						category := ""
+						for _, src := range cat.Sources {
+							if src.Strategy == "kiwix" {
+								category = src.Params["category"]
+								break
+							}
+						}
+						return m, FetchKiwixCmd(m.Tabs[m.ActiveTab], lang, category, m.Config)
+					}
 				}
 			}
 		}
@@ -216,7 +226,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Err != nil {
 				catalog.Error = msg.Err.Error()
 			} else {
-				catalog.Items = msg.Items
+				catalog.GutenbergItems = msg.Items
 				catalog.Error = ""
 				m.syncGutenbergTable(msg.TabName)
 			}
@@ -230,7 +240,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Err != nil {
 				catalog.Error = msg.Err.Error()
 			} else {
-				catalog.Items = msg.Items
+				catalog.GutenbergItems = msg.Items
 				catalog.Error = ""
 				m.syncGutenbergTable(msg.TabName)
 			}
@@ -243,14 +253,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ActiveDownloads = 0
 		}
 		if catalog, ok := m.DynamicCatalogs[msg.TabName]; ok {
-			if msg.Index >= 0 && msg.Index < len(catalog.Items) {
+			if msg.Index >= 0 && msg.Index < len(catalog.GutenbergItems) {
 				if msg.Err != nil {
-					catalog.Items[msg.Index].Status = "Error: " + msg.Err.Error()
+					catalog.GutenbergItems[msg.Index].Status = "Error: " + msg.Err.Error()
 				} else {
-					catalog.Items[msg.Index].Status = "Downloaded"
-					catalog.Items[msg.Index].Downloaded = true
+					catalog.GutenbergItems[msg.Index].Status = "Downloaded"
+					catalog.GutenbergItems[msg.Index].Downloaded = true
 				}
 				m.syncGutenbergTable(msg.TabName)
+			}
+		}
+		return m, nil
+
+	case KiwixCatalogLoadedMsg:
+		if catalog, ok := m.DynamicCatalogs[msg.TabName]; ok {
+			catalog.Loading = false
+			if msg.Err != nil {
+				catalog.Error = msg.Err.Error()
+			} else {
+				catalog.KiwixItems = msg.Items
+				catalog.Error = ""
+				m.syncKiwixTable(msg.TabName)
+			}
+		}
+		return m, nil
+
+	case KiwixCatalogSearchMsg:
+		if catalog, ok := m.DynamicCatalogs[msg.TabName]; ok {
+			catalog.Loading = false
+			catalog.SearchQuery = msg.Query
+			if msg.Err != nil {
+				catalog.Error = msg.Err.Error()
+			} else {
+				catalog.KiwixItems = msg.Items
+				catalog.Error = ""
+				m.syncKiwixTable(msg.TabName)
+			}
+		}
+		return m, nil
+
+	case KiwixDownloadMsg:
+		m.ActiveDownloads--
+		if m.ActiveDownloads < 0 {
+			m.ActiveDownloads = 0
+		}
+		if catalog, ok := m.DynamicCatalogs[msg.TabName]; ok {
+			if msg.Index >= 0 && msg.Index < len(catalog.KiwixItems) {
+				if msg.Err != nil {
+					catalog.KiwixItems[msg.Index].Status = "Error: " + msg.Err.Error()
+				} else {
+					catalog.KiwixItems[msg.Index].Status = "Downloaded"
+					catalog.KiwixItems[msg.Index].Downloaded = true
+				}
+				m.syncKiwixTable(msg.TabName)
 			}
 		}
 		return m, nil
@@ -393,12 +448,12 @@ type GutenbergDownloadMsg struct {
 // handleGutenbergDownload handles downloading the selected Gutenberg book
 func (m *Model) handleGutenbergDownload() (tea.Model, tea.Cmd) {
 	idx := m.Tables[m.ActiveTab].Cursor()
-	catalog, ok := m.DynamicCatalogs["Gutenberg"]
-	if !ok || idx < 0 || idx >= len(catalog.Items) {
+	catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]
+	if !ok || idx < 0 || idx >= len(catalog.GutenbergItems) {
 		return m, nil
 	}
 
-	item := &catalog.Items[idx]
+	item := &catalog.GutenbergItems[idx]
 	if item.Downloaded || item.Status == "Downloading..." {
 		return m, nil
 	}
@@ -470,12 +525,98 @@ func (m *Model) syncGutenbergTable(tabName string) {
 	}
 
 	var rows []table.Row
-	for _, item := range catalog.Items {
+	for _, item := range catalog.GutenbergItems {
 		author := core.GetPrimaryAuthor(item.Book)
 		downloads := fmt.Sprintf("%d", item.Book.DownloadCount)
 		rows = append(rows, table.Row{item.Book.Title, author, item.Status, downloads})
 	}
 	m.Tables[tabIdx].SetRows(rows)
+}
+
+// syncKiwixTable updates the Kiwix table rows from DynamicCatalogs
+func (m *Model) syncKiwixTable(tabName string) {
+	catalog, ok := m.DynamicCatalogs[tabName]
+	if !ok {
+		return
+	}
+
+	// Find Kiwix tab index
+	tabIdx := -1
+	for i, tab := range m.Tabs {
+		if tab == tabName {
+			tabIdx = i
+			break
+		}
+	}
+	if tabIdx < 0 {
+		return
+	}
+
+	var rows []table.Row
+	for _, item := range catalog.KiwixItems {
+		size := humanize.Bytes(uint64(item.Entry.GetFileSize()))
+		date := item.Entry.GetIssuedDate().Format("2006-01")
+		rows = append(rows, table.Row{item.Entry.Title, item.Entry.Summary, item.Entry.Language, size, date, item.Status})
+	}
+	m.Tables[tabIdx].SetRows(rows)
+}
+
+// KiwixDownloadMsg is sent when a Kiwix ZIM download completes
+type KiwixDownloadMsg struct {
+	TabName string
+	Index   int
+	Err     error
+}
+
+// handleKiwixDownload handles downloading the selected Kiwix ZIM file
+func (m *Model) handleKiwixDownload() (tea.Model, tea.Cmd) {
+	idx := m.Tables[m.ActiveTab].Cursor()
+	catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]
+	if !ok || idx < 0 || idx >= len(catalog.KiwixItems) {
+		return m, nil
+	}
+
+	item := &catalog.KiwixItems[idx]
+	if item.Downloaded || item.Status == "Downloading..." {
+		return m, nil
+	}
+
+	item.Status = "Downloading..."
+	m.syncKiwixTable(m.Tabs[m.ActiveTab])
+	m.ActiveDownloads++
+
+	return m, DownloadKiwixCmd(m.Tabs[m.ActiveTab], idx, item.Entry, m.Config)
+}
+
+// DownloadKiwixCmd downloads a Kiwix ZIM file
+func DownloadKiwixCmd(tabName string, index int, entry core.KiwixEntry, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		url := entry.GetDownloadURL()
+		if url == "" {
+			return KiwixDownloadMsg{TabName: tabName, Index: index, Err: fmt.Errorf("no download URL available")}
+		}
+
+		// Find settings for path
+		cat := cfg.Categories[tabName]
+		path := cat.Path
+
+		dest := core.GetExpectedKiwixPath(entry, path)
+
+		progressChan := make(chan downloader.Progress, 10)
+		go func() {
+			downloader.DownloadFile(url, dest, cfg.General.Threads, progressChan)
+		}()
+
+		// Drain progress channel (simplified - doesn't show progress bar for Kiwix)
+		for range progressChan {
+		}
+
+		// Check if file exists after download
+		if core.CheckKiwixDownloaded(entry, path) {
+			return KiwixDownloadMsg{TabName: tabName, Index: index, Err: nil}
+		}
+		return KiwixDownloadMsg{TabName: tabName, Index: index, Err: fmt.Errorf("download failed")}
+	}
 }
 
 func (m *Model) updateItemState(category string, index int, updateFn func(*Item)) {

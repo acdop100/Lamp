@@ -16,7 +16,12 @@ sources:
     strategy: "gutenberg"
     params:
       organization: "by_author" # Options: by_author, by_id, flat
-      language: "en"
+
+  - id: "kiwix"
+    name: "Kiwix Library"
+    strategy: "kiwix"
+    params:
+      category: "" # Optional: wikipedia, wiktionary, gutenberg, etc.
 
   # --- Games ---
   - id: "melonds"

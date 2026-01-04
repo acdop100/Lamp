@@ -17,6 +17,7 @@ general:
 categories:
   Gutenberg:
     path: "./Downloads/Gutenberg"
+    language: "en"
     sources:
       - id: "gutenberg"
   ISO Images:
@@ -32,6 +33,11 @@ categories:
       - id: "kiwix-wikipedia"
       - id: "kiwix-phet"
       - id: "kiwix-openstreetmap"
+  Kiwix Library:
+    path: "./Downloads/Kiwix"
+    language: "eng"
+    sources:
+      - id: "kiwix"
   Applications:
     path: "./Downloads/Apps"
     sources:
