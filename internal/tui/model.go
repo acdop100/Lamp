@@ -124,6 +124,7 @@ type Model struct {
 	DynamicCatalogs map[string]*DynamicCatalog // Key = tab name
 	SearchInput     textinput.Model            // Shared text input for search
 	SearchActive    bool                       // Whether search mode is active
+	FilterQuery     string                     // Current filter query for static tabs
 }
 
 func progressBar(percent float64, width int) string {

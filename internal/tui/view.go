@@ -133,16 +133,6 @@ func (m Model) View() string {
 			Align(lipgloss.Center).
 			Render(lipgloss.JoinHorizontal(lipgloss.Top, tabs...))
 
-		// Search input row (only in search mode)
-		var searchRow string
-		if m.State == stateSearch {
-			searchStyle := lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(forestGreen).
-				Padding(0, 1)
-			searchRow = searchStyle.Render(m.SearchInput.View())
-		}
-
 		tableView := m.Tables[m.ActiveTab].View()
 
 		// Footer - different for dynamic catalogs
@@ -166,24 +156,37 @@ func (m Model) View() string {
 				Render(" h/l: tabs | d: download | shift-d: download all | u: check updates | shift-u: update all | c: open config | q: quit")
 		}
 
-		// Join everything into one string WITHOUT margins first
-		var content string
+		// Search bar - always visible, compact inline style (no border)
+		searchPrefix := lipgloss.NewStyle().Foreground(sand).Render("/:")
 		if m.State == stateSearch {
-			content = lipgloss.JoinVertical(lipgloss.Left,
-				configHeader,
-				tabRow,
-				searchRow,
-				tableView,
-				footer,
-			)
-		} else {
-			content = lipgloss.JoinVertical(lipgloss.Left,
-				configHeader,
-				tabRow,
-				tableView,
-				footer,
-			)
+			searchPrefix = lipgloss.NewStyle().Foreground(forestGreen).Bold(true).Render("/:")
 		}
+		searchBar := searchPrefix + " " + m.SearchInput.View()
+
+		// configHeader centered across full width, search bar overlayed on left
+		centeredHeader := lipgloss.NewStyle().
+			Width(m.Width - 4).
+			Align(lipgloss.Center).
+			Render(configHeader)
+		// Place search bar at position 0, overlaying the left side of the centered header
+		topRow := lipgloss.Place(m.Width-4, 1, lipgloss.Left, lipgloss.Top, searchBar,
+			lipgloss.WithWhitespaceBackground(lipgloss.NoColor{}),
+		)
+		// Overlay by combining: take search bar width chars, then the rest from centered header
+		searchWidth := lipgloss.Width(searchBar)
+		if searchWidth < len(centeredHeader) {
+			topRow = searchBar + centeredHeader[searchWidth:]
+		} else {
+			topRow = searchBar
+		}
+
+		// Join everything into one string WITHOUT margins first
+		content := lipgloss.JoinVertical(lipgloss.Left,
+			topRow,
+			tabRow,
+			tableView,
+			footer,
+		)
 
 		return docStyle.Render(content)
 

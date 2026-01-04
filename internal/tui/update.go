@@ -5,6 +5,7 @@ import (
 	"lamp/internal/config"
 	"lamp/internal/core"
 	"lamp/internal/downloader"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,8 +32,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.State = stateList
 				m.SearchActive = false
 				m.SearchInput.Reset()
-				catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]
-				if ok {
+
+				// Handle dynamic catalogs (reload default list)
+				if catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]; ok {
 					catalog.Loading = true
 					catalog.SearchQuery = ""
 					if catalog.CatalogType == "gutenberg" {
@@ -57,13 +59,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						return m, FetchKiwixCmd(m.Tabs[m.ActiveTab], lang, category, m.Config)
 					}
+				} else {
+					// Static tab - clear filter and restore full table
+					m.FilterQuery = ""
+					m.syncTableRows(m.ActiveTab)
 				}
 				return m, nil
 			case "enter":
 				query := m.SearchInput.Value()
 				if query != "" {
-					catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]
-					if ok {
+					// Handle dynamic catalogs (API search)
+					if catalog, ok := m.DynamicCatalogs[m.Tabs[m.ActiveTab]]; ok {
 						m.State = stateList
 						m.SearchActive = false
 						catalog.Loading = true
@@ -83,12 +89,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							}
 							return m, SearchKiwixCmd(m.Tabs[m.ActiveTab], query, lang, m.Config)
 						}
+					} else {
+						// Static tab - apply filter locally (already filtered live, just exit search mode)
+						m.State = stateList
+						m.SearchActive = false
 					}
 				}
 				return m, nil
 			}
-			// Update text input
+			// Update text input and apply live filtering for static tabs
 			m.SearchInput, cmd = m.SearchInput.Update(msg)
+			// Live filtering for static tabs
+			if !m.isDynamicTab(m.ActiveTab) {
+				m.FilterQuery = m.SearchInput.Value()
+				m.applyTableFilter(m.ActiveTab)
+			}
 			return m, cmd
 		}
 
@@ -102,13 +117,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ActiveTab = (m.ActiveTab - 1 + len(m.Tabs)) % len(m.Tabs)
 			return m, nil
 		case "/", "s":
-			// Enter search mode (only for dynamic catalogs like Gutenberg or Kiwix)
-			if m.isDynamicTab(m.ActiveTab) {
-				m.State = stateSearch
-				m.SearchActive = true
-				m.SearchInput.Focus()
-				return m, nil
-			}
+			// Enter search mode for all tabs
+			m.State = stateSearch
+			m.SearchActive = true
+			m.SearchInput.Focus()
+			return m, nil
 		case "u":
 			// Trigger update check for all items in active category (not for dynamic catalogs)
 			if m.isDynamicTab(m.ActiveTab) {
@@ -639,6 +652,23 @@ func (m *Model) syncTableRows(tabIndex int) {
 	var rows []table.Row
 	for _, it := range m.TableData[tabIndex] {
 		rows = append(rows, it.ToRow())
+	}
+	m.Tables[tabIndex].SetRows(rows)
+}
+
+// applyTableFilter filters the table rows for static tabs based on FilterQuery
+func (m *Model) applyTableFilter(tabIndex int) {
+	if tabIndex < 0 || tabIndex >= len(m.TableData) {
+		return
+	}
+
+	query := strings.ToLower(m.FilterQuery)
+	var rows []table.Row
+	for _, it := range m.TableData[tabIndex] {
+		// Filter by Name (case-insensitive)
+		if query == "" || strings.Contains(strings.ToLower(it.Source.Name), query) {
+			rows = append(rows, it.ToRow())
+		}
 	}
 	m.Tables[tabIndex].SetRows(rows)
 }
