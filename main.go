@@ -49,6 +49,9 @@ func main() {
 		log.Fatalf("Error loading config: %v", err)
 	}
 
+	// 1.5. Apply Rate Limits
+	core.ApplyRateLimitConfig(cfg.General.ApiRateLimit, cfg.General.ApiBurst)
+
 	// Check system compatibility
 	warnings := config.CheckSystemCompatibility(cfg)
 
@@ -81,7 +84,8 @@ func main() {
 			cat := cfg.Categories[catName]
 			for _, src := range cat.Sources {
 				target := cfg.GetTargetPath(catName, src)
-				result := core.CheckVersion(src, target, cfg.General.GitHubToken)
+				checker := core.NewChecker(nil, cfg.General.GitHubToken)
+				result := checker.CheckVersion(src, target)
 
 				statusStr := string(result.Status)
 				style := gray // Default

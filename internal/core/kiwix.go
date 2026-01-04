@@ -18,6 +18,11 @@ const (
 	kiwixCacheTTL    = 24 * time.Hour
 )
 
+var (
+	// Global rate limiter for Kiwix API: 5 requests burst, refill 1 per second
+	kiwixRateLimiter = NewRateLimiter(5, time.Second)
+)
+
 // KiwixFeed represents the OPDS Atom feed from Kiwix
 type KiwixFeed struct {
 	XMLName      xml.Name     `xml:"feed"`
@@ -134,6 +139,9 @@ func FetchKiwixEntries(language string, category string, limit int) ([]KiwixEntr
 
 	apiURL := fmt.Sprintf("%s?%s", kiwixBaseURL, params.Encode())
 
+	// Rate limit API calls
+	kiwixRateLimiter.Wait()
+
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
@@ -176,6 +184,9 @@ func SearchKiwixEntries(query string, language string, limit int) ([]KiwixEntry,
 	}
 
 	apiURL := fmt.Sprintf("%s?%s", kiwixBaseURL, params.Encode())
+
+	// Rate limit API calls
+	kiwixRateLimiter.Wait()
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest("GET", apiURL, nil)
@@ -283,7 +294,7 @@ func saveKiwixCache(entries []KiwixEntry, language string, category string) {
 		return
 	}
 
-	os.WriteFile(path, data, 0644)
+	os.WriteFile(path, data, 0600)
 }
 
 // GetExpectedKiwixPath generates the local file path for a Kiwix ZIM file

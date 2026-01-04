@@ -670,7 +670,8 @@ type CheckMsg struct {
 
 func checkSourceCmd(index int, category string, src config.Source, localPath string, githubToken string) tea.Cmd {
 	return func() tea.Msg {
-		result := core.CheckVersion(src, localPath, githubToken)
+		checker := core.NewChecker(nil, githubToken)
+		result := checker.CheckVersion(src, localPath)
 		return CheckMsg{Category: category, Index: index, Result: result}
 	}
 }
@@ -710,7 +711,8 @@ func DownloadCmd(index int, category string, src config.Source, dest string, ver
 			if downloadURL == "" {
 				// 0. Auto-resolve
 				progressChan <- downloader.Progress{Downloaded: 0, Total: -2} // Special indicator for "Resolving..."
-				res := core.CheckVersion(src, dest, githubToken)
+				checker := core.NewChecker(nil, githubToken)
+				res := checker.CheckVersion(src, dest)
 				if res.ResolvedURL == "" {
 					progressChan <- downloader.Progress{Error: fmt.Errorf("could not resolve download URL: %s", res.Message)}
 					close(progressChan)
@@ -746,8 +748,15 @@ func DownloadCmd(index int, category string, src config.Source, dest string, ver
 				// Ensure we are in the right directory (category path)
 				dest = filepath.Join(filepath.Dir(dest), newName)
 			} else if downloadURL != "" && (filepath.Base(dest) == src.Name || strings.Contains(filepath.Base(dest), "[")) {
-				// Fallback generic name fix
-				dest = filepath.Join(filepath.Dir(dest), filepath.Base(downloadURL))
+				// Fallback generic name fix - sanitize the filename from URL
+				remoteFilename := filepath.Base(downloadURL)
+				sanitized, err := core.SanitizeFilename(remoteFilename)
+				if err != nil {
+					progressChan <- downloader.Progress{Error: fmt.Errorf("invalid filename from URL: %w", err)}
+					close(progressChan)
+					return
+				}
+				dest = filepath.Join(filepath.Dir(dest), sanitized)
 			}
 
 			// 1. Log space check

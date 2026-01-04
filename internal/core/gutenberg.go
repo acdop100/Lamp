@@ -20,6 +20,11 @@ const (
 	cacheTTL        = 24 * time.Hour
 )
 
+var (
+	// Global rate limiter for Gutenberg API: 5 requests burst, refill 1 per second
+	gutenbergRateLimiter = NewRateLimiter(5, time.Second)
+)
+
 // gutenbergCache represents the structure of the local cache file
 type gutenbergCache struct {
 	Timestamp time.Time       `json:"timestamp"`
@@ -73,6 +78,9 @@ func FetchTopBooks(language string, limit int) ([]GutenbergBook, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	for len(allBooks) < limit && nextURL != "" {
+		// Rate limit API calls
+		gutenbergRateLimiter.Wait()
+
 		req, err := http.NewRequest("GET", nextURL, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
@@ -170,11 +178,14 @@ func saveCache(books []GutenbergBook) {
 		return
 	}
 
-	os.WriteFile(path, data, 0644)
+	os.WriteFile(path, data, 0600)
 }
 
 // SearchBooks searches for books by title or author
 func SearchBooks(query string, language string) ([]GutenbergBook, error) {
+	// Rate limit API calls
+	gutenbergRateLimiter.Wait()
+
 	encodedQuery := url.QueryEscape(query)
 	apiURL := fmt.Sprintf("%s?search=%s&languages=%s", gutendexBaseURL, encodedQuery, language)
 

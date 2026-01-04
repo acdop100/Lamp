@@ -45,8 +45,10 @@ func VerifyFile(path string, expectedChecksum string) error {
 	var hasher hash.Hash
 	switch strings.ToLower(algo) {
 	case "md5":
+		fmt.Fprintf(os.Stderr, "Warning: MD5 is cryptographically broken and should not be used for security verification. Consider using SHA256.\n")
 		hasher = md5.New()
 	case "sha1":
+		fmt.Fprintf(os.Stderr, "Warning: SHA1 is cryptographically broken and should not be used for security verification. Consider using SHA256.\n")
 		hasher = sha1.New()
 	case "sha256":
 		hasher = sha256.New()

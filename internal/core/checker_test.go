@@ -1,11 +1,43 @@
 package core
 
 import (
+	"bytes"
+	"io"
 	"lamp/internal/config"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// MockHTTPClient allows mocking HTTP responses
+type MockHTTPClient struct {
+	GetFunc  func(url string) (*http.Response, error)
+	HeadFunc func(url string) (*http.Response, error)
+	DoFunc   func(req *http.Request) (*http.Response, error)
+}
+
+func (m *MockHTTPClient) Get(url string) (*http.Response, error) {
+	if m.GetFunc != nil {
+		return m.GetFunc(url)
+	}
+	return nil, nil // Return what you reasonably expect or error
+}
+
+func (m *MockHTTPClient) Head(url string) (*http.Response, error) {
+	if m.HeadFunc != nil {
+		return m.HeadFunc(url)
+	}
+	return nil, nil
+}
+
+func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	if m.DoFunc != nil {
+		return m.DoFunc(req)
+	}
+	return nil, nil
+}
 
 func TestCheckKiwixVersion(t *testing.T) {
 	// 1. Create a dummy old ZIM file
@@ -28,12 +60,32 @@ func TestCheckKiwixVersion(t *testing.T) {
 		},
 	}
 
-	result := CheckVersion(src, localPath, "")
+	// 3. Mock Response
+	mockXML := `
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <entry>
+        <name>wikipedia_en_100_mini_2023-10</name>
+        <issued>2023-10-15T00:00:00Z</issued>
+    </entry>
+</feed>`
+
+	client := &MockHTTPClient{
+		GetFunc: func(url string) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBufferString(mockXML)),
+			}, nil
+		},
+	}
+
+	checker := NewChecker(client, "")
+	result := checker.CheckVersion(src, localPath)
 
 	if result.Status != StatusNewer {
 		t.Errorf("Expected status %v, got %v (Message: %s)", StatusNewer, result.Status, result.Message)
-	} else {
-		t.Logf("Check Result: %+v", result)
+	}
+	if result.Latest != "2023-10" {
+		t.Errorf("Expected latest %s, got %s", "2023-10", result.Latest)
 	}
 }
 
@@ -56,21 +108,45 @@ func TestCheckUbuntuVersion(t *testing.T) {
 		},
 	}
 
-	result := CheckVersion(src, localPath, "")
+	// Mock logic:
+	// 1. GET base_url -> return HTML list
+	// 2. HEAD file url -> return OK
 
-	// Since 25.10 is out, this should be Newer
-	// Note: allow for UpToDate if 24.04 happens to be the latest matched for some reason,
-	// but logically 25.10 exists.
+	client := &MockHTTPClient{
+		GetFunc: func(url string) (*http.Response, error) {
+			html := `
+<html>
+<a href="24.04/">24.04/</a>
+<a href="25.10/">25.10/</a>
+</html>`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBufferString(html)),
+			}, nil
+		},
+		HeadFunc: func(url string) (*http.Response, error) {
+			// Expect request for 25.10 first (reverse sort)
+			if strings.Contains(url, "25.10") {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(nil)}, nil
+			}
+			return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(nil)}, nil
+		},
+	}
+
+	checker := NewChecker(client, "")
+	result := checker.CheckVersion(src, localPath)
+
 	if result.Status != StatusNewer {
-		t.Logf("Expected status %v, got %v (Message: %s)", StatusNewer, result.Status, result.Message)
-	} else {
-		t.Logf("Ubuntu Check Result: %+v", result)
+		t.Errorf("Expected status %v, got %v (Message: %s)", StatusNewer, result.Status, result.Message)
+	}
+	if result.Latest != "25.10" {
+		t.Errorf("Expected latest 25.10, got %s", result.Latest)
 	}
 }
 
 func TestCheckFedoraCoreOSVersion(t *testing.T) {
 	tmpDir := t.TempDir()
-	// Using a known old version
+	// Old version
 	filename := "fedora-coreos-38.20230527.3.0-live-iso.x86_64.iso"
 	localPath := filepath.Join(tmpDir, filename)
 
@@ -87,18 +163,53 @@ func TestCheckFedoraCoreOSVersion(t *testing.T) {
 		},
 	}
 
-	result := CheckVersion(src, localPath, "")
+	mockJSON := `{
+		"architectures": {
+			"x86_64": {
+				"artifacts": {
+					"metal": {
+						"release": "39.20231001.3.0",
+						"formats": {
+							"iso": {
+								"disk": { "location": "https://example.com/fedora-coreos-39.iso" }
+							}
+						}
+					}
+				}
+			}
+		}
+	}`
+
+	client := &MockHTTPClient{
+		GetFunc: func(url string) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBufferString(mockJSON)),
+			}, nil
+		},
+	}
+
+	checker := NewChecker(client, "")
+	result := checker.CheckVersion(src, localPath)
 
 	if result.Status != StatusNewer {
 		t.Errorf("Expected status %v, got %v (Message: %s)", StatusNewer, result.Status, result.Message)
 	}
-	t.Logf("Fedora Check Result: %+v", result)
+	expectedLatest := "39.20231001.3.0"
+	if result.Latest != expectedLatest {
+		t.Errorf("Expected latest %s, got %s", expectedLatest, result.Latest)
+	}
 }
 
 func TestCheckUpToDate(t *testing.T) {
 	tmpDir := t.TempDir()
+	latestFilename := "fedora-coreos-39.iso"
+	latestPath := filepath.Join(tmpDir, latestFilename)
 
-	// First, resolve the latest version to know what filename to create
+	if err := os.WriteFile(latestPath, []byte("latest"), 0644); err != nil {
+		t.Fatalf("Failed to create latest file: %v", err)
+	}
+
 	src := config.Source{
 		Name:     "Fedora Test",
 		Strategy: "fedora_coreos",
@@ -108,34 +219,40 @@ func TestCheckUpToDate(t *testing.T) {
 		},
 	}
 
-	// We pass a dummy localPath just to define the directory
-	initialResult := CheckVersion(src, filepath.Join(tmpDir, "dummy"), "")
-	if initialResult.Status != StatusNotFound && initialResult.Status != StatusNewer {
-		t.Fatalf("Unexpected initial status: %v", initialResult.Status)
+	mockJSON := `{
+		"architectures": {
+			"x86_64": {
+				"artifacts": {
+					"metal": {
+						"release": "39.0.0",
+						"formats": {
+							"iso": {
+								"disk": { "location": "https://example.com/fedora-coreos-39.iso" }
+							}
+						}
+					}
+				}
+			}
+		}
+	}`
+	client := &MockHTTPClient{
+		GetFunc: func(url string) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBufferString(mockJSON)),
+			}, nil
+		},
 	}
 
-	latestFilename := filepath.Base(initialResult.ResolvedURL)
-	if latestFilename == "." || latestFilename == "/" {
-		t.Fatalf("Invalid resolved filename: %s", latestFilename)
-	}
+	checker := NewChecker(client, "")
+	result := checker.CheckVersion(src, latestPath)
 
-	// Create the "latest" file
-	latestPath := filepath.Join(tmpDir, latestFilename)
-	if err := os.WriteFile(latestPath, []byte("latest"), 0644); err != nil {
-		t.Fatalf("Failed to create latest file: %v", err)
+	if result.Status != StatusUpToDate {
+		t.Errorf("Expected status %v, got %v (Message: %s)", StatusUpToDate, result.Status, result.Message)
 	}
-
-	// Run check again
-	finalResult := CheckVersion(src, filepath.Join(tmpDir, "dummy"), "")
-
-	if finalResult.Status != StatusUpToDate {
-		t.Errorf("Expected status %v, got %v (Message: %s)", StatusUpToDate, finalResult.Status, finalResult.Message)
-	}
-	t.Logf("UpToDate Check Result: %+v", finalResult)
 }
 
 func TestCheckRSSVersion(t *testing.T) {
-	// 1. Create a dummy old version
 	tmpDir := t.TempDir()
 	filename := "kiwix-desktop_x86_64_2.4.0.appimage"
 	localPath := filepath.Join(tmpDir, filename)
@@ -143,22 +260,42 @@ func TestCheckRSSVersion(t *testing.T) {
 		t.Fatalf("Failed to create dummy file: %v", err)
 	}
 
-	// 2. Configure Source
 	src := config.Source{
 		Name:     "RSS Test",
 		Strategy: "rss_feed",
 		Params: map[string]string{
-			"feed_url":        "https://download.kiwix.org/release/kiwix-desktop/feed.xml",
+			"feed_url":        "https://example.com/feed.xml",
 			"item_pattern":    `kiwix-desktop_x86_64_.*\.appimage`,
 			"version_pattern": `(\d+\.\d+\.\d+)`,
 		},
 	}
 
-	result := CheckVersion(src, localPath, "")
+	mockRSS := `
+<rss version="2.0">
+<channel>
+	<item>
+		<title>kiwix-desktop_x86_64_2.4.1.appimage</title>
+		<link>https://example.com/kiwix-desktop_x86_64_2.4.1.appimage</link>
+	</item>
+</channel>
+</rss>`
 
-	// 2.4.1 is current latest as of now
+	client := &MockHTTPClient{
+		GetFunc: func(url string) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBufferString(mockRSS)),
+			}, nil
+		},
+	}
+
+	checker := NewChecker(client, "")
+	result := checker.CheckVersion(src, localPath)
+
 	if result.Status != StatusNewer {
 		t.Errorf("Expected status %v, got %v (Message: %s)", StatusNewer, result.Status, result.Message)
 	}
-	t.Logf("RSS Check Result: %+v", result)
+	if result.Latest != "2.4.1" {
+		t.Errorf("Expected latest 2.4.1, got %s", result.Latest)
+	}
 }

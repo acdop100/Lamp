@@ -25,6 +25,30 @@ var (
 	webCache    sync.Map // map[string]string (URL:Body)
 )
 
+// HTTPClient interface for dependency injection
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+	Get(url string) (*http.Response, error)
+	Head(url string) (*http.Response, error)
+}
+
+// Checker struct to hold dependencies
+type Checker struct {
+	client      HTTPClient
+	githubToken string
+}
+
+// NewChecker creates a new Checker with a default or custom HTTP client
+func NewChecker(client HTTPClient, githubToken string) *Checker {
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	return &Checker{
+		client:      client,
+		githubToken: githubToken,
+	}
+}
+
 func parseRepo(repo string) (string, string, error) {
 	parts := strings.Split(repo, "/")
 	if len(parts) != 2 {
@@ -194,8 +218,9 @@ func ScanLocalStatus(src config.Source, localPath string) CheckResult {
 				pat = pat + "$"
 			}
 
-			re, err := regexp.Compile(pat)
+			re, err := SafeCompileRegex(pat)
 			if err != nil {
+				// Skip invalid or unsafe patterns
 				continue
 			}
 
@@ -280,7 +305,7 @@ func ScanLocalStatus(src config.Source, localPath string) CheckResult {
 	return CheckResult{Status: StatusNotFound}
 }
 
-func CheckVersion(src config.Source, localPath string, githubToken string) CheckResult {
+func (c *Checker) CheckVersion(src config.Source, localPath string) CheckResult {
 	info, err := os.Stat(localPath)
 	if os.IsNotExist(err) && src.Strategy == "" {
 		// Only return NotFound if we have no strategy to verify against (legacy/direct file)
@@ -292,31 +317,31 @@ func CheckVersion(src config.Source, localPath string, githubToken string) Check
 	// Dynamic Resolution Strategies
 	switch src.Strategy {
 	case "web_scrape":
-		return resolveWebScrape(src, localPath)
+		return c.resolveWebScrape(src, localPath)
 	case "fedora_coreos":
-		return resolveFedoraCoreOS(src, localPath)
+		return c.resolveFedoraCoreOS(src, localPath)
 	case "kiwix_feed":
-		return resolveKiwixFeed(src, localPath)
+		return c.resolveKiwixFeed(src, localPath)
 	case "github_release":
-		return resolveGithubRelease(src, localPath, githubToken)
+		return c.resolveGithubRelease(src, localPath)
 	case "rss_feed":
-		return resolveRSSFeed(src, localPath)
+		return c.resolveRSSFeed(src, localPath)
 	case "http_redirect":
-		return resolveHTTPRedirect(src, localPath)
+		return c.resolveHTTPRedirect(src, localPath)
 	case "chromium_rss":
-		return resolveChromiumRSS(src, localPath)
+		return c.resolveChromiumRSS(src, localPath)
 	case "chromium_gcs":
-		return resolveChromiumGCS(src, localPath)
+		return c.resolveChromiumGCS(src, localPath)
 	default:
 		// Fallback for direct URLs (legacy behavior)
 		if src.URL != "" {
-			return checkHTTPHeader(src.URL, info)
+			return c.checkHTTPHeader(src.URL, info)
 		}
 		return CheckResult{Status: StatusError, Message: "No strategy or URL provided"}
 	}
 }
 
-func resolveGithubRelease(src config.Source, localPath string, githubToken string) CheckResult {
+func (c *Checker) resolveGithubRelease(src config.Source, localPath string) CheckResult {
 	repo := src.Params["repo"]
 	assetPattern := src.Params["asset_pattern"]
 
@@ -333,9 +358,16 @@ func resolveGithubRelease(src config.Source, localPath string, githubToken strin
 	if val, ok := githubCache.Load(repo); ok {
 		release = val.(*github.RepositoryRelease)
 	} else {
-		client := github.NewClient(nil)
-		if githubToken != "" {
-			client = client.WithAuthToken(githubToken)
+		// Use the injected client for GitHub interactions if possible
+		// The github library requires an *http.Client. We can type assert or fallback.
+		var httpClient *http.Client
+		if hc, ok := c.client.(*http.Client); ok {
+			httpClient = hc
+		}
+
+		client := github.NewClient(httpClient)
+		if c.githubToken != "" {
+			client = client.WithAuthToken(c.githubToken)
 		} else if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 			client = client.WithAuthToken(token)
 		}
@@ -351,9 +383,9 @@ func resolveGithubRelease(src config.Source, localPath string, githubToken strin
 	tagName := release.GetTagName()
 
 	// Find the matching asset
-	re, err := regexp.Compile(assetPattern)
+	re, err := SafeCompileRegex(assetPattern)
 	if err != nil {
-		return CheckResult{Status: StatusError, Message: "Invalid asset_pattern regex"}
+		return CheckResult{Status: StatusError, Message: "Invalid or unsafe asset_pattern regex: " + err.Error()}
 	}
 
 	var downloadURL string
@@ -406,7 +438,7 @@ func resolveGithubRelease(src config.Source, localPath string, githubToken strin
 	}
 }
 
-func resolveWebScrape(src config.Source, localPath string) CheckResult {
+func (c *Checker) resolveWebScrape(src config.Source, localPath string) CheckResult {
 	baseURL := src.Params["base_url"]
 	versionPattern := src.Params["version_pattern"]
 	fileTemplate := src.Params["file_template"]
@@ -420,7 +452,7 @@ func resolveWebScrape(src config.Source, localPath string) CheckResult {
 	if val, ok := webCache.Load(baseURL); ok {
 		body = val.([]byte)
 	} else {
-		resp, err := http.Get(baseURL)
+		resp, err := c.client.Get(baseURL)
 		if err != nil {
 			return CheckResult{Status: StatusError, Message: "Failed to scrape: " + err.Error()}
 		}
@@ -450,14 +482,12 @@ func resolveWebScrape(src config.Source, localPath string) CheckResult {
 	regexPattern := strings.ReplaceAll(templateFilenamePattern, "{{version}}", `(\d+\.\d+)`)
 	reFile := regexp.MustCompile(regexPattern)
 
-	client := &http.Client{Timeout: 5 * time.Second}
-
 	for i := len(versions) - 1; i >= 0; i-- {
 		v := versions[i]
 		rPath := strings.ReplaceAll(fileTemplate, "{{version}}", v)
 		rURL := baseURL + rPath
 
-		resp, err := client.Head(rURL)
+		resp, err := c.client.Head(rURL)
 		if err == nil && resp.StatusCode == http.StatusOK {
 			latestVersion = v
 			remoteFullURL = rURL
@@ -514,7 +544,7 @@ func resolveWebScrape(src config.Source, localPath string) CheckResult {
 	}
 }
 
-func resolveFedoraCoreOS(src config.Source, localPath string) CheckResult {
+func (c *Checker) resolveFedoraCoreOS(src config.Source, localPath string) CheckResult {
 	stream := src.Params["stream"]
 	arch := src.Params["arch"]
 
@@ -527,7 +557,7 @@ func resolveFedoraCoreOS(src config.Source, localPath string) CheckResult {
 
 	metaURL := fmt.Sprintf("https://builds.coreos.fedoraproject.org/streams/%s.json", stream)
 
-	resp, err := http.Get(metaURL)
+	resp, err := c.client.Get(metaURL)
 	if err != nil {
 		return CheckResult{Status: StatusError, Message: "Failed to fetch Fedora metadata: " + err.Error()}
 	}
@@ -601,7 +631,7 @@ func resolveFedoraCoreOS(src config.Source, localPath string) CheckResult {
 	}
 }
 
-func resolveKiwixFeed(src config.Source, localPath string) CheckResult {
+func (c *Checker) resolveKiwixFeed(src config.Source, localPath string) CheckResult {
 	series := src.Params["series"]
 	feedURL := src.Params["feed_url"]
 
@@ -613,7 +643,6 @@ func resolveKiwixFeed(src config.Source, localPath string) CheckResult {
 	// Search API with 'q'
 	// Recursive search strategy: strip last segment if not found
 
-	client := &http.Client{Timeout: 10 * time.Second}
 	var feed Feed
 
 	searchQuery := series
@@ -621,7 +650,7 @@ func resolveKiwixFeed(src config.Source, localPath string) CheckResult {
 
 	for {
 		searchURL := fmt.Sprintf("%s?q=%s", feedURL, url.QueryEscape(searchQuery))
-		resp, err := client.Get(searchURL)
+		resp, err := c.client.Get(searchURL)
 		if err != nil {
 			return CheckResult{Status: StatusError, Message: err.Error()}
 		}
@@ -719,7 +748,7 @@ func resolveKiwixFeed(src config.Source, localPath string) CheckResult {
 	}
 }
 
-func resolveRSSFeed(src config.Source, localPath string) CheckResult {
+func (c *Checker) resolveRSSFeed(src config.Source, localPath string) CheckResult {
 	feedURL := src.Params["feed_url"]
 	itemPattern := src.Params["item_pattern"]
 	versionPattern := src.Params["version_pattern"]
@@ -728,7 +757,7 @@ func resolveRSSFeed(src config.Source, localPath string) CheckResult {
 		return CheckResult{Status: StatusError, Message: "Missing rss_feed params"}
 	}
 
-	resp, err := http.Get(feedURL)
+	resp, err := c.client.Get(feedURL)
 	if err != nil {
 		return CheckResult{Status: StatusError, Message: "Failed to fetch RSS: " + err.Error()}
 	}
@@ -739,13 +768,13 @@ func resolveRSSFeed(src config.Source, localPath string) CheckResult {
 		return CheckResult{Status: StatusError, Message: "Failed to parse RSS: " + err.Error()}
 	}
 
-	reItem, err := regexp.Compile(itemPattern)
+	reItem, err := SafeCompileRegex(itemPattern)
 	if err != nil {
-		return CheckResult{Status: StatusError, Message: "Invalid item_pattern regex"}
+		return CheckResult{Status: StatusError, Message: "Invalid or unsafe item_pattern regex: " + err.Error()}
 	}
-	reVersion, err := regexp.Compile(versionPattern)
+	reVersion, err := SafeCompileRegex(versionPattern)
 	if err != nil {
-		return CheckResult{Status: StatusError, Message: "Invalid version_pattern regex"}
+		return CheckResult{Status: StatusError, Message: "Invalid or unsafe version_pattern regex: " + err.Error()}
 	}
 
 	var bestItem *RSSItem
@@ -812,7 +841,7 @@ func resolveRSSFeed(src config.Source, localPath string) CheckResult {
 	}
 }
 
-func resolveHTTPRedirect(src config.Source, localPath string) CheckResult {
+func (c *Checker) resolveHTTPRedirect(src config.Source, localPath string) CheckResult {
 	targetURL := src.Params["url"]
 	versionPattern := src.Params["version_pattern"]
 
@@ -820,14 +849,17 @@ func resolveHTTPRedirect(src config.Source, localPath string) CheckResult {
 		return CheckResult{Status: StatusError, Message: "Missing url param for http_redirect"}
 	}
 
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return nil // Follow all redirects
-		},
-		Timeout: 10 * time.Second,
-	}
+	// Note: We need a client that follows redirects, but we also want to catch the final URL.
+	// The Standard checkRedirect policy is fine (10 redirects), but we need to inspect resp.Request.URL.
+	// c.client might have a different CheckRedirect policy or none.
+	// However, we can't easily change CheckRedirect on an interface or injected client safely without assumptions.
+	// We'll trust c.client follows redirects or the user configured it so.
+	// But `c.client` interface doesn't expose CheckRedirect.
+	// If `c.client` is *http.Client, we can use it.
+	// If it's a wrapper, we rely on its behavior.
+	// Standard http.Client follows redirects by default.
 
-	resp, err := client.Head(targetURL)
+	resp, err := c.client.Head(targetURL)
 	if err != nil {
 		return CheckResult{Status: StatusError, Message: "Redirect check failed: " + err.Error()}
 	}
@@ -886,13 +918,8 @@ func resolveHTTPRedirect(src config.Source, localPath string) CheckResult {
 	}
 }
 
-func checkHTTPHeader(url string, localInfo os.FileInfo) CheckResult {
-	// ... (rest of checkHTTPHeader as before)
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-
-	resp, err := client.Head(url)
+func (c *Checker) checkHTTPHeader(url string, localInfo os.FileInfo) CheckResult {
+	resp, err := c.client.Head(url)
 	if err != nil {
 		return CheckResult{Status: StatusError, Message: err.Error()}
 	}
@@ -924,7 +951,7 @@ func checkHTTPHeader(url string, localInfo os.FileInfo) CheckResult {
 	return CheckResult{Status: StatusUpToDate, Message: "No specific version changes detected via headers"}
 }
 
-func resolveChromiumRSS(src config.Source, localPath string) CheckResult {
+func (c *Checker) resolveChromiumRSS(src config.Source, localPath string) CheckResult {
 	feedURL := src.Params["feed_url"]
 	assetPattern := src.Params["asset_pattern"]
 	itemPattern := src.Params["item_pattern"]
@@ -933,14 +960,14 @@ func resolveChromiumRSS(src config.Source, localPath string) CheckResult {
 		return CheckResult{Status: StatusError, Message: "Missing feed_url or asset_pattern for chromium_rss"}
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	// Create a new request to set headers, using c.client to execute
 	req, err := http.NewRequest("GET", feedURL, nil)
 	if err != nil {
 		return CheckResult{Status: StatusError, Message: "Failed to create request: " + err.Error()}
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", "lamp/1.0 (+https://github.com/acdop100/Lamp)")
 
-	resp, err := client.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return CheckResult{Status: StatusError, Message: "Failed to fetch RSS: " + err.Error()}
 	}
@@ -951,16 +978,16 @@ func resolveChromiumRSS(src config.Source, localPath string) CheckResult {
 		return CheckResult{Status: StatusError, Message: "Failed to parse RSS: " + err.Error()}
 	}
 
-	reAsset, err := regexp.Compile(assetPattern)
+	reAsset, err := SafeCompileRegex(assetPattern)
 	if err != nil {
-		return CheckResult{Status: StatusError, Message: "Invalid asset_pattern regex"}
+		return CheckResult{Status: StatusError, Message: "Invalid or unsafe asset_pattern regex: " + err.Error()}
 	}
 
 	var reItem *regexp.Regexp
 	if itemPattern != "" {
-		reItem, err = regexp.Compile(itemPattern)
+		reItem, err = SafeCompileRegex(itemPattern)
 		if err != nil {
-			return CheckResult{Status: StatusError, Message: "Invalid item_pattern regex"}
+			return CheckResult{Status: StatusError, Message: "Invalid or unsafe item_pattern regex: " + err.Error()}
 		}
 	}
 
@@ -1034,7 +1061,7 @@ func resolveChromiumRSS(src config.Source, localPath string) CheckResult {
 	}
 }
 
-func resolveChromiumGCS(src config.Source, localPath string) CheckResult {
+func (c *Checker) resolveChromiumGCS(src config.Source, localPath string) CheckResult {
 	prefix := src.Params["prefix"]     // e.g. "Mac" or "Mac_Arm"
 	filename := src.Params["filename"] // e.g. "chrome-mac.zip"
 
@@ -1046,7 +1073,7 @@ func resolveChromiumGCS(src config.Source, localPath string) CheckResult {
 	// URL: https://commondatastorage.googleapis.com/chromium-browser-snapshots/?delimiter=/&prefix=<prefix>/
 	metaURL := fmt.Sprintf("https://commondatastorage.googleapis.com/chromium-browser-snapshots/?delimiter=/&prefix=%s/", prefix)
 
-	resp, err := http.Get(metaURL)
+	resp, err := c.client.Get(metaURL)
 	if err != nil {
 		return CheckResult{Status: StatusError, Message: "Failed to fetch GCS list: " + err.Error()}
 	}
@@ -1085,8 +1112,7 @@ func resolveChromiumGCS(src config.Source, localPath string) CheckResult {
 	downloadURL := fmt.Sprintf("https://commondatastorage.googleapis.com/chromium-browser-snapshots/%s/%d/%s", prefix, latestRev, filename)
 
 	// 4. Check if file exists (HEAD)
-	client := &http.Client{Timeout: 5 * time.Second}
-	headResp, err := client.Head(downloadURL)
+	headResp, err := c.client.Head(downloadURL)
 	if err != nil || headResp.StatusCode != http.StatusOK {
 		// If latest revision doesn't have the file (rare but possible during upload), try previous
 		if len(revisions) > 1 {

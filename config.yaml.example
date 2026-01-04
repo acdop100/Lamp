@@ -5,6 +5,8 @@ storage:
 # General app settings
 general:
   threads: 6
+  api_rate_limit: 1.0 # Requests per second (refill rate)
+  api_burst: 5        # Maximum burst requests allowed simultaneously
   os:
     # - "linux"
     - "macos"

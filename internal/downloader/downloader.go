@@ -3,6 +3,7 @@ package downloader
 import (
 	"fmt"
 	"io"
+	"lamp/internal/core"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -41,6 +42,11 @@ func DownloadFile(url, dest string, threads int, progressChan chan<- Progress) e
 
 	if url == "" {
 		return fmt.Errorf("empty download URL")
+	}
+
+	// Validate that the URL uses HTTPS
+	if err := core.ValidateDownloadURL(url); err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {

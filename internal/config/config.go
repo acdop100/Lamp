@@ -19,10 +19,12 @@ type Config struct {
 }
 
 type GeneralConfig struct {
-	OS          []string `yaml:"os"`
-	Arch        []string `yaml:"arch"`
-	GitHubToken string   `yaml:"github_token"`
-	Threads     int      `yaml:"threads"` // Number of parallel download segments
+	OS           []string `yaml:"os"`
+	Arch         []string `yaml:"arch"`
+	GitHubToken  string   `yaml:"github_token"`
+	Threads      int      `yaml:"threads"`        // Number of parallel download segments
+	ApiRateLimit float64  `yaml:"api_rate_limit"` // Requests per second
+	ApiBurst     int      `yaml:"api_burst"`      // Maximum burst of requests
 }
 
 // Category defines a group of download sources
@@ -171,6 +173,12 @@ func LoadConfig(configPath string, defaultConfig []byte, catalogFS fs.FS) (*Conf
 	}
 	if cfg.General.Threads <= 0 {
 		cfg.General.Threads = 4
+	}
+	if cfg.General.ApiRateLimit <= 0 {
+		cfg.General.ApiRateLimit = 1.0
+	}
+	if cfg.General.ApiBurst <= 0 {
+		cfg.General.ApiBurst = 5
 	}
 
 	// 1.5. Priority: Config > .env > Environment
